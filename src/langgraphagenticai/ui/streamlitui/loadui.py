@@ -664,7 +664,7 @@ class LoadStreamlitUI:
                 )
 
     def _render_version_footer(self):
-        model = st.session_state.get("selected_groq_model", "Llama-3.1-8B")
+        model = st.session_state.get("selected_groq_model", "gpt-oss-20b")
         st.markdown(
             f'<div class="version-footer">Groq · {model} · V2.0</div>',
             unsafe_allow_html=True,
