@@ -1,56 +1,87 @@
 import streamlit as st
+
 from src.langgraphagenticai.ui.streamlitui.loadui import LoadStreamlitUI
 from src.langgraphagenticai.LLMS.groqllm import GroqLLM
 from src.langgraphagenticai.graph.graph_builder import GraphBuilder
 from src.langgraphagenticai.ui.streamlitui.display_result import DisplayResultStreamlit
 
+
+@st.cache_resource(show_spinner=False)
+def get_cached_graph(usecase: str, groq_model: str, groq_api_key: str, tavily_api_key: str = "", conversation_id=None):
+    llm_config = GroqLLM(user_contols_input={
+        "selected_llm": "Groq",
+        "selected_groq_model": groq_model,
+        "GROQ_API_KEY": groq_api_key,
+    })
+    model = llm_config.get_llm_model()
+    graph_builder = GraphBuilder(model)
+    if usecase == "Chat with PDF":
+        return graph_builder.setup_graph(usecase, conversation_id=conversation_id)
+    return graph_builder.setup_graph(usecase)
+
+
 def load_langgraph_agenticai_app():
     """
-    Loads and runs the LangGraph AgenticAI application with Streamlit UI.
-    This function initializes the UI, handles user input, configures the LLM model,
-    sets up the graph based on the selected use case, and displays the output while 
-    implementing exception handling for robustness.
-
+    Entry point for LangGraph Agentic AI Streamlit App
     """
 
-    ##Load UI
-    ui=LoadStreamlitUI()
-    user_input=ui.load_streamlit_ui()
+    # ---------------- LOAD UI ----------------
+    ui = LoadStreamlitUI()
+    user_input = ui.load_streamlit_ui()
 
     if not user_input:
-        st.error("Error: Failed to load user input from the UI.")
+        st.error("Failed to load UI inputs.")
         return
-    
-    user_message = st.chat_input("Enter your message:")
 
-    if user_message:
-        try:
-            ## Configure The LLM's
-            obj_llm_config=GroqLLM(user_contols_input=user_input)
-            model=obj_llm_config.get_llm_model()
+    # ---------------- USER MESSAGE ----------------
+    user_message = None
 
-            if not model:
-                st.error("Error: LLM model could not be initialized")
-                return
-            
-            # Initialize and set up the graph based on use case
-            usecase=user_input.get("selected_usecase")
+    # AI News flow
+    if st.session_state.get("IsFetchButtonClicked", False):
+        user_message = st.session_state.get("timeframe")
+        st.session_state.IsFetchButtonClicked = False
 
-            if not usecase:
-                    st.error("Error: No use case selected.")
-                    return
-            
-            ## Graph Builder
+    # Chat-based flow
+    else:
+        user_message = st.chat_input(
+            "Ask anything…"
+        )
 
-            graph_builder=GraphBuilder(model)
-            try:
-                 graph=graph_builder.setup_graph(usecase)
-                 print(user_message)
-                 DisplayResultStreamlit(usecase,graph,user_message).display_result_on_ui()
-            except Exception as e:
-                 st.error(f"Error: Graph set up failed- {e}")
-                 return
+    # ---------------- MODEL & GRAPH SETUP ----------------
+    try:
+        usecase = user_input.get("selected_usecase")
+        if not usecase:
+            st.error("No use case selected.")
+            return
 
-        except Exception as e:
-             st.error(f"Error: Graph set up failed- {e}")
-             return   
+        if usecase == "Chat with PDF":
+            graph = get_cached_graph(
+                usecase,
+                user_input.get("selected_groq_model"),
+                user_input.get("GROQ_API_KEY"),
+                tavily_api_key=user_input.get("TAVILY_API_KEY", ""),
+                conversation_id=st.session_state.get("current_conversation_id"),
+            )
+        else:
+            graph = get_cached_graph(
+                usecase,
+                user_input.get("selected_groq_model"),
+                user_input.get("GROQ_API_KEY"),
+                tavily_api_key=user_input.get("TAVILY_API_KEY", ""),
+            )
+
+    except Exception as e:
+        st.error(f"Setup failed: {e}")
+        return
+
+    # ---------------- RENDER OUTPUT ----------------
+    DisplayResultStreamlit(
+        usecase=usecase,
+        graph=graph,
+        user_message=user_message
+    ).display_result_on_ui()
+
+
+# ---------------- STREAMLIT ENTRY ----------------
+if __name__ == "__main__":
+    load_langgraph_agenticai_app()

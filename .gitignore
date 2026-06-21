@@ -1,1 +1,8 @@
+.streamlit/secrets.toml
+chat_history.db
+pdf_indexes/
+keys.txt
+__pycache__/
+*.pyc
+.venv/
 venv/
