@@ -94,22 +94,27 @@ def render_search_results(results: list):
 
 
 def render_message(role: str, content: str):
-    safe = html.escape(content or "").replace("\n", "<br>")
+    content = content or ""
+
     if role == "user":
+        # User messages: keep as plain escaped text (no markdown needed for input)
+        safe = html.escape(content).replace("\n", "<br>")
         st.markdown(
             f"""<div class="msg-row msg-user"><div class="bubble bubble-user">{safe}</div></div>""",
             unsafe_allow_html=True,
         )
     else:
+        # Assistant messages: render real markdown (tables, bold, lists, etc.)
+        # by opening the styled wrapper, letting st.markdown parse content,
+        # then closing the wrapper as a separate call.
         st.markdown(
-            f"""
-            <div class="msg-row msg-ai">
-                <div class="avatar-ai"><span class="material-symbols-outlined">smart_toy</span></div>
-                <div class="bubble bubble-ai">{safe}</div>
-            </div>
-            """,
+            """<div class="msg-row msg-ai"><div class="avatar-ai">
+            <span class="material-symbols-outlined">smart_toy</span></div>
+            <div class="bubble bubble-ai">""",
             unsafe_allow_html=True,
         )
+        st.markdown(content, unsafe_allow_html=False)
+        st.markdown("</div></div>", unsafe_allow_html=True)
 
 
 def render_thinking(placeholder):

@@ -418,7 +418,7 @@ class LoadStreamlitUI:
             }
             .avatar-ai .material-symbols-outlined{ color: var(--accent); font-size:16px; }
             .bubble{
-                max-width:70%;
+                max-width:85%;
                 padding:10px 14px;
                 border-radius:10px;
                 font-size:14px;
@@ -426,6 +426,7 @@ class LoadStreamlitUI:
             }
             .bubble-ai{
                 background-color:#111;
+                max-width:85%;
                 border:0.5px solid #1e1e1e;
                 color:#ccc;
             }
@@ -468,6 +469,63 @@ class LoadStreamlitUI:
             }
             button[data-testid="stChatInputSubmitButton"] svg{
                 fill: #fff !important;
+            }
+            /* ---------- MARKDOWN TABLES INSIDE AI BUBBLES ---------- */
+            .bubble-ai table{
+                width: 100%;
+                border-collapse: collapse;
+                margin: 8px 0;
+                font-size: 13px;
+            }
+            .bubble-ai th, .bubble-ai td{
+                border: 0.5px solid #2a2a2a;
+                padding: 6px 10px;
+                text-align: left;
+            }
+            .bubble-ai th{
+                background-color: #161616;
+                color: #ddd;
+            }
+            .bubble-ai td{
+                color: #ccc;
+            }
+            .bubble-ai code{
+                background-color: #161616;
+                padding: 2px 6px;
+                border-radius: 4px;
+                font-size: 12px;
+            }
+            /* ---------- SCALE MARKDOWN HEADINGS INSIDE AI BUBBLES ---------- */
+            .bubble-ai h1{
+                font-size: 19px !important;
+                margin: 10px 0 8px 0 !important;
+                color: #fff;
+            }
+            .bubble-ai h2{
+                font-size: 17px !important;
+                margin: 10px 0 6px 0 !important;
+                color: #fff;
+            }
+            .bubble-ai h3{
+                font-size: 15px !important;
+                margin: 8px 0 6px 0 !important;
+                color: #ddd;
+            }
+            .bubble-ai p, .bubble-ai li{
+                font-size: 14px !important;
+                line-height: 1.55 !important;
+                color: #ccc;
+            }
+            .bubble-ai ul, .bubble-ai ol{
+                margin: 6px 0 !important;
+                padding-left: 20px !important;
+            }
+            .bubble-ai blockquote{
+                border-left: 2px solid #2a2a2a;
+                padding-left: 12px;
+                margin: 8px 0;
+                color: #999;
+                font-style: italic;
             }
             </style>
             """,
