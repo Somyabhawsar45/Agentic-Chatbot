@@ -9,3 +9,4 @@ streamlit
 tavily-python
 pypdf
 sentence-transformers
+langchain-tavily
