@@ -3,7 +3,7 @@ import json
 import re
 
 import streamlit as st
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
 from src.langgraphagenticai.database import db_utils
 
 
@@ -211,7 +211,13 @@ class DisplayResultStreamlit:
             render_thinking(thinking)
 
             final_response = ""
-            for event in self.graph.stream({"messages": ("user", self.user_message)}):
+            history = [
+                SystemMessage(content="You are Netra, an intelligent agentic AI assistant. You remember everything the user shares with you and respond helpfully and concisely.")
+            ] + [
+                HumanMessage(content=m) if r == "user" else AIMessage(content=m)
+                for r, m in st.session_state.chat_history
+            ]
+            for event in self.graph.stream({"messages": history}):
                 for value in event.values():
                     msg = value.get("messages")
                     if isinstance(msg, AIMessage) and msg.content:
@@ -233,7 +239,13 @@ class DisplayResultStreamlit:
             thinking = st.empty()
             render_thinking(thinking)
 
-            result = self.graph.invoke({"messages": [HumanMessage(content=self.user_message)]})
+            history = [
+                SystemMessage(content="You are Netra, an intelligent agentic AI assistant with web search capability. Use search results to give accurate, up-to-date answers.")
+            ] + [
+                HumanMessage(content=m) if r == "user" else AIMessage(content=m)
+                for r, m in st.session_state.chat_history
+            ]
+            result = self.graph.invoke({"messages": history})
             thinking.empty()
 
             with st.expander("Agent Execution Trace"):
@@ -316,7 +328,11 @@ class DisplayResultStreamlit:
             thinking = st.empty()
             render_thinking(thinking)
 
-            result = self.graph.invoke({"messages": [HumanMessage(content=self.user_message)]})
+            history = [
+                        HumanMessage(content=m) if r == "user" else AIMessage(content=m)
+                        for r, m in st.session_state.chat_history
+          ]
+            result = self.graph.invoke({"messages": history})
             thinking.empty()
 
             final_response = ""
