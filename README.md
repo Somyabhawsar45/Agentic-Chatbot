@@ -1,10 +1,8 @@
 <p align="center">
-  <img src="assets/logo.png" width="80" alt="Netra AI Logo"/>
+  <img src="assets/logo.png" width="100" alt="Netra AI Logo"/>
 </p>
 
-<h1 align="center">
-  <img src="assets/logo.png" width="32" style="vertical-align:middle"/> Netra AI
-</h1>
+<h1 align="center">Netra AI</h1>
 <p align="center"><em>See Beyond. — Stateful Agentic AI powered by LangGraph + Groq</em></p>
 
 <p align="center">
