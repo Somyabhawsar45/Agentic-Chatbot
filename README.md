@@ -1,5 +1,20 @@
-# 👁 Netra AI
-> See Beyond. — Stateful Agentic AI powered by LangGraph + Groq
+<p align="center">
+  <img src="assets/logo.png" width="80" alt="Netra AI Logo"/>
+</p>
+
+<h1 align="center">👁 Netra AI</h1>
+<p align="center"><em>See Beyond. — Stateful Agentic AI powered by LangGraph + Groq</em></p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Framework-LangGraph-purple"/>
+  <img src="https://img.shields.io/badge/LLM-Groq-orange"/>
+  <img src="https://img.shields.io/badge/Frontend-Streamlit-red"/>
+  <img src="https://img.shields.io/badge/Database-SQLite-blue"/>
+  <img src="https://img.shields.io/badge/License-MIT-green"/>
+  <a href="https://netra-agentic-ai.streamlit.app"><img src="https://img.shields.io/badge/Live-Demo-brightgreen"/></a>
+</p>
+
+---
 
 ## 🔗 Live Demo
 [netra-agentic-ai.streamlit.app](https://netra-agentic-ai.streamlit.app)
