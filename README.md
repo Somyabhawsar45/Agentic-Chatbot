@@ -42,8 +42,8 @@
 
 ## ⚙ Setup Locally
 ```bash
-git clone https://github.com/Somyabhawsar45/netra-ai
-cd netra-ai
+git clone https://github.com/Somyabhawsar45/Agentic-Chatbot
+cd Agentic-Chatbot
 pip install -r requirements.txt
 ```
 Add a `.env` file:
