@@ -249,8 +249,8 @@ class DisplayResultStreamlit:
             thinking.empty()
 
             with st.expander("Agent Execution Trace"):
-                st.write("LLM → Groq")
-                st.write("Tool → Tavily Web Search")
+                st.write_stream("LLM → Groq")
+                st.write_stream("Tool → Tavily Web Search")
 
             for msg in result["messages"]:
                 if isinstance(msg, ToolMessage):
@@ -301,8 +301,8 @@ class DisplayResultStreamlit:
             thinking.empty()
 
             with st.expander("Agent Execution Trace"):
-                st.write("Tool → Tavily")
-                st.write("LLM → Groq")
+                st.write_stream("Tool → Tavily")
+                st.write_stream("LLM → Groq")
 
             try:
                 path = f"./AINews/{self.user_message.lower()}_summary.md"

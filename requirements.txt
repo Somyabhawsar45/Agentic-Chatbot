@@ -10,3 +10,5 @@ tavily-python
 pypdf
 sentence-transformers
 langchain-tavily
+fastapi
+uvicorn
