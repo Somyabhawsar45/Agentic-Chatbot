@@ -7,7 +7,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Framework-LangGraph-purple"/>
-  <img src="https://img.shields.io/badge/LLM-Groq-orange"/>
+  <img src="https://img.shields.io/badge/LLM-Groq_(gpt--oss--20b)-orange"/>
   <img src="https://img.shields.io/badge/Frontend-Streamlit-red"/>
   <img src="https://img.shields.io/badge/Database-SQLite-blue"/>
   <img src="https://img.shields.io/badge/License-MIT-green"/>
@@ -19,12 +19,15 @@
 ## 🔗 Live Demo
 [netra-agentic-ai.streamlit.app](https://netra-agentic-ai.streamlit.app)
 
+> **Note:** This demo runs on Streamlit Community Cloud with a local SQLite database. Since the free tier's filesystem is ephemeral, accounts and chat history may reset if the app restarts after a period of inactivity.
+
 ## 🚀 Features
+- 🔐 **User Authentication** — Secure login/signup with bcrypt password hashing; private, per-user chat history
 - 🤖 **Basic Chatbot** — Multi-turn stateful conversation with memory
 - 🌐 **Web Search** — Real-time lookup via Tavily + ReAct agent
 - 📄 **Chat With PDF** — RAG pipeline with FAISS + HuggingFace embeddings
 - 📰 **News Summary** — Map-Reduce summarization across multiple sources
-- 💬 **Chat History** — ChatGPT-like persistent conversation history via SQLite
+- 💬 **Chat History** — ChatGPT-like persistent conversation history via SQLite, scoped privately per user
 
 ## 🏗 Architecture
 ![Netra AI Architecture](assets/architecture.png)
@@ -33,10 +36,11 @@
 | Layer | Tech |
 |-------|------|
 | Framework | LangGraph, LangChain |
-| LLM | Groq (Llama 3.1) |
+| LLM | Groq (gpt-oss-20b) |
 | Web Search | Tavily |
 | Embeddings | HuggingFace sentence-transformers |
 | Vector Store | FAISS |
+| Auth | bcrypt (password hashing) |
 | Frontend | Streamlit |
 | Database | SQLite |
 
