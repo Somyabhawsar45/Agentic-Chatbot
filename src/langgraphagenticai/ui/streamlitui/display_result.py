@@ -135,8 +135,9 @@ class DisplayResultStreamlit:
 
     def _ensure_conversation(self, first_message: str):
         if st.session_state.current_conversation_id is None:
+            user_id = st.session_state.authenticated_user["id"]
             title = db_utils.make_title(first_message)
-            new_id = db_utils.create_conversation(self.usecase, title)
+            new_id = db_utils.create_conversation(user_id, self.usecase, title)
             st.session_state.current_conversation_id = new_id
 
     def _persist(self, role: str, content: str):
@@ -249,8 +250,8 @@ class DisplayResultStreamlit:
             thinking.empty()
 
             with st.expander("Agent Execution Trace"):
-                st.write_stream("LLM → Groq")
-                st.write_stream("Tool → Tavily Web Search")
+                st.write("LLM → Groq")
+                st.write("Tool → Tavily Web Search")
 
             for msg in result["messages"]:
                 if isinstance(msg, ToolMessage):
@@ -301,8 +302,8 @@ class DisplayResultStreamlit:
             thinking.empty()
 
             with st.expander("Agent Execution Trace"):
-                st.write_stream("Tool → Tavily")
-                st.write_stream("LLM → Groq")
+                st.write("Tool → Tavily")
+                st.write("LLM → Groq")
 
             try:
                 path = f"./AINews/{self.user_message.lower()}_summary.md"

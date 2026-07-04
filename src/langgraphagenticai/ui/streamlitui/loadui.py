@@ -103,12 +103,17 @@ class LoadStreamlitUI:
         with st.sidebar:
             self._render_logo()
 
-            
-            self._render_new_chat()            
+            if st.button("Sign Out", icon=":material/logout:", use_container_width=True):
+                st.session_state.authenticated_user = None
+                st.session_state.chat_history = []
+                st.session_state.current_conversation_id = None
+                st.rerun()
+
+            self._render_new_chat()
             self._render_usecase_nav()
             self._render_active_usecase_controls()
             self._render_history()
-            self._render_settings()            
+            self._render_settings()
             self._render_version_footer()
 
         return self.user_controls
@@ -141,6 +146,18 @@ class LoadStreamlitUI:
                 --text-faint:#444;
                 --text-version:#333;
             }
+            header[data-testid="stHeader"] {
+    background-color: #0a0a0a !important;
+}
+
+.stApp {
+    background-color: #0a0a0a !important;
+}
+
+[data-testid="stBottomBlockContainer"],
+[data-testid="stBottom"] {
+    background-color: #0a0a0a !important;
+}
 
             html, body, .stApp, [class*="css"] {
                 font-family: 'Inter', sans-serif !important;
@@ -655,8 +672,9 @@ class LoadStreamlitUI:
                     with st.spinner("Reading and indexing PDF..."):
                         try:
                             if st.session_state.current_conversation_id is None:
+                                user_id = st.session_state.authenticated_user["id"]
                                 title = db_utils.make_title(uploaded_file.name)
-                                new_id = db_utils.create_conversation("Chat with PDF", title)
+                                new_id = db_utils.create_conversation(user_id, "Chat with PDF", title)
                                 st.session_state.current_conversation_id = new_id
 
                             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
@@ -679,7 +697,8 @@ class LoadStreamlitUI:
         st.markdown("<hr/>", unsafe_allow_html=True)
         st.markdown('<div class="sidebar-label">History</div>', unsafe_allow_html=True)
 
-        conversations = db_utils.get_conversations(self.user_controls["selected_usecase"])
+        user_id = st.session_state.authenticated_user["id"]
+        conversations = db_utils.get_conversations(user_id, self.user_controls["selected_usecase"])
 
         if not conversations:
             st.caption("No past conversations yet.")

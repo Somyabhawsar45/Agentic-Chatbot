@@ -21,11 +21,23 @@ def init_db():
     """Create tables if they don't exist. Call once on app startup."""
     with get_connection() as conn:
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                name TEXT NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS conversations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
                 usecase TEXT NOT NULL,
                 title TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             )
         """)
         conn.execute("""
@@ -40,12 +52,49 @@ def init_db():
         """)
 
 
-def create_conversation(usecase: str, title: str) -> int:
-    """Create a new conversation row, return its id."""
+# ------------------------ USERS ------------------------
+
+def create_user(username: str, name: str, email: str, password_hash: str) -> int:
     with get_connection() as conn:
         cur = conn.execute(
-            "INSERT INTO conversations (usecase, title, created_at) VALUES (?, ?, ?)",
-            (usecase, title, datetime.now().isoformat())
+            "INSERT INTO users (username, name, email, password_hash, created_at) VALUES (?, ?, ?, ?, ?)",
+            (username, name, email, password_hash, datetime.now().isoformat())
+        )
+        return cur.lastrowid
+
+
+def get_user_by_username(username: str):
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE username = ?", (username,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_all_users():
+    """Used to build the credentials dict streamlit-authenticator needs."""
+    with get_connection() as conn:
+        rows = conn.execute("SELECT * FROM users").fetchall()
+        return [dict(r) for r in rows]
+
+
+def username_exists(username: str) -> bool:
+    return get_user_by_username(username) is not None
+
+
+def email_exists(email: str) -> bool:
+    with get_connection() as conn:
+        row = conn.execute("SELECT 1 FROM users WHERE email = ?", (email,)).fetchone()
+        return row is not None
+
+
+# --------------------- CONVERSATIONS ---------------------
+
+def create_conversation(user_id: int, usecase: str, title: str) -> int:
+    with get_connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO conversations (user_id, usecase, title, created_at) VALUES (?, ?, ?, ?)",
+            (user_id, usecase, title, datetime.now().isoformat())
         )
         return cur.lastrowid
 
@@ -58,18 +107,17 @@ def add_message(conversation_id: int, role: str, content: str):
         )
 
 
-def get_conversations(usecase: str):
-    """Return list of conversations for a usecase, newest first."""
+def get_conversations(user_id: int, usecase: str):
+    """Return list of conversations for a user+usecase, newest first."""
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT id, title, created_at FROM conversations WHERE usecase = ? ORDER BY id DESC",
-            (usecase,)
+            "SELECT id, title, created_at FROM conversations WHERE user_id = ? AND usecase = ? ORDER BY id DESC",
+            (user_id, usecase)
         ).fetchall()
         return [dict(r) for r in rows]
 
 
 def get_messages(conversation_id: int):
-    """Return list of (role, content) tuples for a conversation, in order."""
     with get_connection() as conn:
         rows = conn.execute(
             "SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY id ASC",

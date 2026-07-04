@@ -12,3 +12,5 @@ sentence-transformers
 langchain-tavily
 fastapi
 uvicorn
+streamlit-authenticator
+bcrypt
