@@ -9,9 +9,7 @@ from ..graph.graph_builder import GraphBuilder
 router = APIRouter()
 
 def get_llm():
-    from dotenv import dotenv_values
-    config = dotenv_values(r"C:\Users\mahen\OneDrive\Documents\Visual Studio 2022\Agenitc Chatbot\.env")
-    api_key = config.get("GROQ_API_KEY", "")
+    api_key = os.getenv("GROQ_API_KEY")
     return ChatGroq(
         api_key=api_key,
         model="llama-3.1-8b-instant",
