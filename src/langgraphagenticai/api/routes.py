@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../../../../.env'))
 from langchain_groq import ChatGroq
 from fastapi import APIRouter
-from .schemas import ChatRequest, SearchRequest, RAGRequest, ChatResponse
+from .schemas import ChatRequest, SearchRequest, RAGRequest, ChatResponse, CourseDoubtRequest
 from ..graph.graph_builder import GraphBuilder
 
 router = APIRouter()
@@ -51,5 +51,35 @@ async def rag(req: RAGRequest):
     })
     return ChatResponse(
         answer=result["messages"][-1].content,
+        session_id=req.session_id
+    )
+
+from ..rag.pdf_rag_utils import retrieve_chunks
+
+@router.post("/course-doubt", response_model=ChatResponse)
+async def course_doubt(req: CourseDoubtRequest):
+    chunks = retrieve_chunks(req.session_id, req.question, k=4)
+
+    if not chunks:
+        return ChatResponse(
+            answer="I don't have course content indexed for this course yet.",
+            session_id=req.session_id
+        )
+
+    context = "\n\n".join(chunks)
+    prompt = f"""Answer the student's question using only the course content below. If the answer isn't in the content, say so honestly.
+
+Course Content:
+{context}
+
+Question: {req.question}
+
+Answer:"""
+
+    llm = get_llm()
+    response = llm.invoke(prompt)
+
+    return ChatResponse(
+        answer=response.content,
         session_id=req.session_id
     )

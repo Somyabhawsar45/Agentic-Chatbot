@@ -15,3 +15,7 @@ class RAGRequest(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     session_id: str
+
+class CourseDoubtRequest(BaseModel):
+    question: str
+    session_id: str
