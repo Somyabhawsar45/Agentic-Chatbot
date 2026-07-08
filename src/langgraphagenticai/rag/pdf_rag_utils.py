@@ -70,3 +70,21 @@ def retrieve_chunks(conversation_id: int, query: str, k: int = 4):
         return []
     results = vectorstore.similarity_search(query, k=k)
     return [doc.page_content for doc in results]
+
+def build_index_from_text(text: str, course_id: str) -> str:
+    """
+    Chunk -> embed -> save FAISS index for a course (text-based, not PDF).
+    """
+    from langchain_community.vectorstores import FAISS
+
+    if not text.strip():
+        raise ValueError("No content provided to index for this course.")
+
+    chunks = chunk_text(text)
+    embeddings = get_embeddings()
+
+    vectorstore = FAISS.from_texts(chunks, embeddings)
+
+    index_path = os.path.join(INDEX_ROOT, f"convo_{course_id}")
+    vectorstore.save_local(index_path)
+    return index_path

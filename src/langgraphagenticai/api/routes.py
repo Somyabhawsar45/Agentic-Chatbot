@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../../../../.env'))
 from langchain_groq import ChatGroq
 from fastapi import APIRouter
-from .schemas import ChatRequest, SearchRequest, RAGRequest, ChatResponse, CourseDoubtRequest
+from .schemas import ChatRequest, SearchRequest, RAGRequest, ChatResponse, CourseDoubtRequest,IndexCourseRequest
 from ..graph.graph_builder import GraphBuilder
 
 router = APIRouter()
@@ -83,3 +83,10 @@ Answer:"""
         answer=response.content,
         session_id=req.session_id
     )
+
+from ..rag.pdf_rag_utils import build_index_from_text
+
+@router.post("/index-course")
+async def index_course(req: IndexCourseRequest):
+    build_index_from_text(req.content, req.course_id)
+    return {"success": True, "message": "Course indexed successfully"}

@@ -38,7 +38,7 @@
 | Framework | LangGraph, LangChain |
 | LLM | Groq (gpt-oss-20b) |
 | Web Search | Tavily |
-| Embeddings | HuggingFace sentence-transformers |
+| Embeddings | HuggingFace sentence-transformers |re
 | Vector Store | FAISS |
 | Auth | bcrypt (password hashing) |
 | Frontend | Streamlit |

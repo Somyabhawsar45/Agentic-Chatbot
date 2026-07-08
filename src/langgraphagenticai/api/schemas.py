@@ -19,3 +19,7 @@ class ChatResponse(BaseModel):
 class CourseDoubtRequest(BaseModel):
     question: str
     session_id: str
+
+class IndexCourseRequest(BaseModel):
+    course_id: str
+    content: str
