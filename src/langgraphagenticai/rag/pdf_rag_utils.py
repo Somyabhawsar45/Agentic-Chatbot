@@ -9,15 +9,14 @@ os.makedirs(INDEX_ROOT, exist_ok=True)
 _embeddings_instance = None
 
 def get_embeddings():
-    """Uses HuggingFace's hosted Inference API instead of a local model,
-    so no heavy torch/transformers download is needed on lightweight hosts.
-    Cached manually (not st.cache_resource) so this works outside Streamlit too."""
+    """Uses HuggingFace's hosted Inference Endpoint (current, non-deprecated API)
+    instead of a local model, so no heavy torch/transformers download is needed."""
     global _embeddings_instance
     if _embeddings_instance is None:
-        from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings
-        _embeddings_instance = HuggingFaceInferenceAPIEmbeddings(
-            api_key=os.getenv("HUGGINGFACEHUB_API_TOKEN"),
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
+        from langchain_huggingface import HuggingFaceEndpointEmbeddings
+        _embeddings_instance = HuggingFaceEndpointEmbeddings(
+            model="sentence-transformers/all-MiniLM-L6-v2",
+            huggingfacehub_api_token=os.getenv("HUGGINGFACEHUB_API_TOKEN"),
         )
     return _embeddings_instance
 

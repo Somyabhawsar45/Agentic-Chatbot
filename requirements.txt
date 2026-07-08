@@ -13,5 +13,6 @@ fastapi
 uvicorn
 streamlit-authenticator
 bcrypt
+langchain-huggingface
 langchain-text-splitters
 python-dotenv
