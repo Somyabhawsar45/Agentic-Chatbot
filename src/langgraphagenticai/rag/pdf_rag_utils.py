@@ -1,18 +1,25 @@
 import os
 from pypdf import PdfReader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-import streamlit as st
 
 INDEX_ROOT = os.path.join(os.getcwd(), "pdf_indexes")
 os.makedirs(INDEX_ROOT, exist_ok=True)
 
 
-@st.cache_resource
+_embeddings_instance = None
+
 def get_embeddings():
-    """Cached once per app session — survives all reruns. Imports are lazy
-    so heavy ML libraries only load when PDF/RAG is actually used."""
-    from langchain_huggingface import HuggingFaceEmbeddings
-    return HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    """Uses HuggingFace's hosted Inference API instead of a local model,
+    so no heavy torch/transformers download is needed on lightweight hosts.
+    Cached manually (not st.cache_resource) so this works outside Streamlit too."""
+    global _embeddings_instance
+    if _embeddings_instance is None:
+        from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings
+        _embeddings_instance = HuggingFaceInferenceAPIEmbeddings(
+            api_key=os.getenv("HUGGINGFACEHUB_API_TOKEN"),
+            model_name="sentence-transformers/all-MiniLM-L6-v2"
+        )
+    return _embeddings_instance
 
 
 def extract_text_from_pdf(file_path: str) -> str:
