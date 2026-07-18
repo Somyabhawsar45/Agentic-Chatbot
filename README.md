@@ -27,7 +27,7 @@
 - 🌐 **Web Search** — Real-time lookup via Tavily + ReAct agent
 - 📄 **Chat With PDF** — RAG pipeline with FAISS + HuggingFace embeddings
 - 📰 **News Summary** — Map-Reduce summarization across multiple sources
-- 💬 **Chat History** — ChatGPT-like persistent conversation history via SQLite, scoped privately per user
+- 💬 **Chat History** — Persistent conversation history via a custom SQLite schema (users, conversations, messages), loaded per user/conversation and injected into context on each invocation — enables ChatGPT-like multi-conversation history per user
 
 ## 🏗 Architecture
 ![Netra AI Architecture](assets/architecture.png)
