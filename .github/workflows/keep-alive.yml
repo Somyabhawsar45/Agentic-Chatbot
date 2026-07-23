@@ -1,0 +1,28 @@
+name: Keep Streamlit Awake
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'   # every 10 minutes
+  workflow_dispatch:          # lets you trigger manually too
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Playwright
+        run: |
+          npm install -g playwright
+          npx playwright install --with-deps chromium
+
+      - name: Visit Streamlit app
+        run: |
+          node -e "
+          const { chromium } = require('playwright');
+          (async () => {
+            const browser = await chromium.launch();
+            const page = await browser.newPage();
+            await page.goto('https://netra-agentic-ai.streamlit.app', { waitUntil: 'networkidle', timeout: 60000 });
+            await page.waitForTimeout(5000);
+            await browser.close();
+          })();
+          "
