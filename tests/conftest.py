@@ -14,6 +14,7 @@ def temp_db(tmp_path, monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setattr(db_utils, "DB_PATH", str(tmp_path / "test.db"))
     monkeypatch.setattr(db_utils, "_initialized", False)
+    monkeypatch.setattr(db_utils, "_pg_error", None)
     monkeypatch.setattr(checkpointer, "_checkpointer", None)
     pdf_rag_utils._cache.clear()
     db_utils.init_db()

@@ -22,6 +22,11 @@ def valid_email(email: str) -> bool:
 
 def render_auth_gate():
     db_utils.init_db()
+    if db_utils.postgres_error():
+        st.warning(
+            "⚠️ The cloud database is unreachable, so the app is using temporary local storage "
+            "(accounts and chats reset on restart). Check `DATABASE_URL` in the app secrets."
+        )
 
     if "authenticated_user" not in st.session_state:
         st.session_state.authenticated_user = None

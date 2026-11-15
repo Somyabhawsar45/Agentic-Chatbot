@@ -21,8 +21,34 @@ _pool_lock = threading.Lock()
 _initialized = False
 
 
+_pg_error = None  # set when DATABASE_URL is configured but the database can't be reached
+
+
 def use_postgres() -> bool:
+    if _pg_error:
+        return False  # fell back to SQLite for this process (see _probe_postgres)
     return os.environ.get("DATABASE_URL", "").startswith(("postgres://", "postgresql://"))
+
+
+def postgres_error():
+    """Why Postgres was skipped (None if it's working or not configured)."""
+    return _pg_error
+
+
+def _probe_postgres() -> None:
+    """
+    Try ONE connection before building the pool. A connection pool retries forever in the
+    background, and repeated bad logins make Supabase block the app (ECIRCUITBREAKER).
+    On failure remember the reason and fall back to SQLite until the app restarts.
+    """
+    global _pg_error
+    import psycopg
+    try:
+        with psycopg.connect(os.environ["DATABASE_URL"], connect_timeout=8):
+            pass
+    except Exception as e:
+        first_line = str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
+        _pg_error = f"{type(e).__name__}: {first_line}"
 
 
 def get_pg_pool():
@@ -182,6 +208,8 @@ def init_db():
     global _initialized
     if _initialized:
         return
+    if use_postgres():
+        _probe_postgres()
     for stmt in (_POSTGRES_SCHEMA if use_postgres() else _SQLITE_SCHEMA):
         _run(stmt)
     _initialized = True
