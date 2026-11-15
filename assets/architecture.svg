@@ -1,0 +1,139 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1000" width="1200" height="1000" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#555"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="1000" fill="#ffffff"/>
+
+  <!-- Title -->
+  <text x="600" y="30" text-anchor="middle" font-size="20" font-weight="700" fill="#222">Netra AI — Architecture</text>
+
+  <!-- User -->
+  <rect x="510" y="50" width="180" height="44" rx="10" fill="#f1eee8" stroke="#777"/>
+  <text x="600" y="78" text-anchor="middle" font-size="17" font-weight="600" fill="#333">User</text>
+
+  <!-- Streamlit UI -->
+  <rect x="250" y="130" width="700" height="66" rx="12" fill="#e6f0fb" stroke="#2563a8"/>
+  <text x="600" y="157" text-anchor="middle" font-size="18" font-weight="700" fill="#16467a">Streamlit UI</text>
+  <text x="600" y="182" text-anchor="middle" font-size="13.5" fill="#2563a8">bcrypt login · chat history sidebar · ⚙ settings · 📎 PDF attach · live execution trace · 👍/👎 feedback</text>
+
+  <!-- FastAPI -->
+  <rect x="980" y="130" width="190" height="66" rx="12" fill="#e6f0fb" stroke="#2563a8" stroke-dasharray="5 3"/>
+  <text x="1075" y="157" text-anchor="middle" font-size="16" font-weight="700" fill="#16467a">FastAPI service</text>
+  <text x="1075" y="180" text-anchor="middle" font-size="12" fill="#2563a8">/chat /search /rag /course-doubt</text>
+
+  <!-- GraphBuilder -->
+  <rect x="250" y="232" width="700" height="58" rx="12" fill="#eeecfb" stroke="#5b4bb7"/>
+  <text x="600" y="257" text-anchor="middle" font-size="17" font-weight="700" fill="#3b2f8f">LangGraph GraphBuilder</text>
+  <text x="600" y="279" text-anchor="middle" font-size="13" fill="#5b4bb7">compiles one graph per mode · cached per model + API key · checkpointer for stateful modes</text>
+
+  <!-- Arrows top -->
+  <line x1="600" y1="94" x2="600" y2="128" stroke="#555" stroke-width="2" marker-end="url(#a)"/>
+  <line x1="600" y1="196" x2="600" y2="230" stroke="#555" stroke-width="2" marker-end="url(#a)"/>
+  <polyline points="1075,196 1075,261 952,261" fill="none" stroke="#555" stroke-dasharray="5 3" marker-end="url(#a)"/>
+  <line x1="420" y1="290" x2="225" y2="338" stroke="#555" marker-end="url(#a)"/>
+  <line x1="600" y1="290" x2="620" y2="338" stroke="#555" marker-end="url(#a)"/>
+  <line x1="780" y1="290" x2="995" y2="338" stroke="#555" marker-end="url(#a)"/>
+
+  <!-- Panel A: Netra Agent -->
+  <rect x="30" y="340" width="390" height="300" rx="14" fill="#e3f4ee" stroke="#0f6b4f" stroke-width="1.5"/>
+  <text x="225" y="368" text-anchor="middle" font-size="17" font-weight="700" fill="#0b4d39">🧠 Netra Agent (default)</text>
+  <text x="225" y="388" text-anchor="middle" font-size="12.5" fill="#0f6b4f">ReAct loop · the LLM picks its own tools</text>
+  <rect x="60" y="408" width="130" height="50" rx="10" fill="#fff" stroke="#0f6b4f"/>
+  <text x="125" y="438" text-anchor="middle" font-size="15" font-weight="600" fill="#0b4d39">agent</text>
+  <rect x="260" y="408" width="130" height="50" rx="10" fill="#fff" stroke="#0f6b4f"/>
+  <text x="325" y="438" text-anchor="middle" font-size="15" font-weight="600" fill="#0b4d39">tools</text>
+  <line x1="190" y1="425" x2="258" y2="425" stroke="#555" marker-end="url(#a)"/>
+  <line x1="260" y1="443" x2="192" y2="443" stroke="#555" marker-end="url(#a)"/>
+  <text x="225" y="486" text-anchor="middle" font-size="13" fill="#0b4d39">tavily_search · search_pdf · save_memory</text>
+  <text x="50" y="516" font-size="12.5" fill="#0f6b4f">• Short-term memory: checkpointer, 1 thread per chat</text>
+  <text x="50" y="538" font-size="12.5" fill="#0f6b4f">• Long-term memory: user facts shared by all chats</text>
+  <text x="50" y="560" font-size="12.5" fill="#0f6b4f">• Loop guard: max 2 tool rounds, then must answer</text>
+  <text x="50" y="582" font-size="12.5" fill="#0f6b4f">• History trimmed to the last 24 messages</text>
+  <text x="50" y="604" font-size="12.5" fill="#0f6b4f">• PDF answers cite page numbers</text>
+
+  <!-- Panel B: Deep Research -->
+  <rect x="440" y="340" width="360" height="300" rx="14" fill="#fdf1e4" stroke="#a35a10" stroke-width="1.5"/>
+  <text x="620" y="368" text-anchor="middle" font-size="17" font-weight="700" fill="#7a4108">🔬 Deep Research</text>
+  <text x="620" y="388" text-anchor="middle" font-size="12.5" fill="#a35a10">multi-agent · human-in-the-loop</text>
+  <rect x="520" y="400" width="200" height="30" rx="8" fill="#fff" stroke="#a35a10"/>
+  <text x="620" y="420" text-anchor="middle" font-size="13.5" fill="#7a4108">planner</text>
+  <rect x="520" y="446" width="200" height="30" rx="8" fill="#fff" stroke="#a35a10" stroke-dasharray="4 3"/>
+  <text x="620" y="466" text-anchor="middle" font-size="13.5" fill="#7a4108">human review (interrupt)</text>
+  <rect x="470" y="492" width="300" height="30" rx="8" fill="#fff" stroke="#a35a10"/>
+  <text x="620" y="512" text-anchor="middle" font-size="13.5" fill="#7a4108">researcher × N  (parallel, Send API)</text>
+  <rect x="490" y="538" width="110" height="30" rx="8" fill="#fff" stroke="#a35a10"/>
+  <text x="545" y="558" text-anchor="middle" font-size="13.5" fill="#7a4108">writer</text>
+  <rect x="640" y="538" width="110" height="30" rx="8" fill="#fff" stroke="#a35a10"/>
+  <text x="695" y="558" text-anchor="middle" font-size="13.5" fill="#7a4108">critic</text>
+  <rect x="520" y="584" width="200" height="30" rx="8" fill="#fff" stroke="#a35a10"/>
+  <text x="620" y="604" text-anchor="middle" font-size="13.5" fill="#7a4108">finalize → cited report</text>
+  <line x1="620" y1="430" x2="620" y2="444" stroke="#555" marker-end="url(#a)"/>
+  <line x1="620" y1="476" x2="620" y2="490" stroke="#555" marker-end="url(#a)"/>
+  <line x1="545" y1="522" x2="545" y2="536" stroke="#555" marker-end="url(#a)"/>
+  <line x1="600" y1="547" x2="638" y2="547" stroke="#555" marker-end="url(#a)"/>
+  <line x1="640" y1="560" x2="602" y2="560" stroke="#555" marker-end="url(#a)"/>
+  <line x1="695" y1="568" x2="680" y2="582" stroke="#555" marker-end="url(#a)"/>
+  <text x="758" y="558" font-size="10.5" fill="#a35a10">≤1 revision</text>
+
+  <!-- Panel C: Classic modes -->
+  <rect x="820" y="340" width="350" height="300" rx="14" fill="#eef3f8" stroke="#4b6584" stroke-width="1.5"/>
+  <text x="995" y="368" text-anchor="middle" font-size="17" font-weight="700" fill="#2f4560">Single-purpose modes</text>
+  <rect x="840" y="384" width="310" height="54" rx="10" fill="#fff" stroke="#4b6584"/>
+  <text x="995" y="406" text-anchor="middle" font-size="14.5" font-weight="600" fill="#2f4560">Basic Chatbot</text>
+  <text x="995" y="427" text-anchor="middle" font-size="12.5" fill="#4b6584">streaming, multi-turn</text>
+  <rect x="840" y="446" width="310" height="54" rx="10" fill="#fff" stroke="#4b6584"/>
+  <text x="995" y="468" text-anchor="middle" font-size="14.5" font-weight="600" fill="#2f4560">Chatbot With Web</text>
+  <text x="995" y="489" text-anchor="middle" font-size="12.5" fill="#4b6584">ReAct + Tavily, deduplicated sources</text>
+  <rect x="840" y="508" width="310" height="54" rx="10" fill="#fff" stroke="#4b6584"/>
+  <text x="995" y="530" text-anchor="middle" font-size="14.5" font-weight="600" fill="#2f4560">Chat with PDF</text>
+  <text x="995" y="551" text-anchor="middle" font-size="12.5" fill="#4b6584">FAISS RAG, page citations + quotes</text>
+  <rect x="840" y="570" width="310" height="54" rx="10" fill="#fff" stroke="#4b6584"/>
+  <text x="995" y="592" text-anchor="middle" font-size="14.5" font-weight="600" fill="#2f4560">AI News</text>
+  <text x="995" y="613" text-anchor="middle" font-size="12.5" fill="#4b6584">fetch → map (summarise) → reduce</text>
+
+  <!-- Arrows to LLM / services -->
+  <line x1="225" y1="640" x2="380" y2="688" stroke="#555" marker-end="url(#a)"/>
+  <line x1="580" y1="640" x2="520" y2="688" stroke="#555" marker-end="url(#a)"/>
+  <line x1="900" y1="640" x2="652" y2="700" stroke="#555" marker-end="url(#a)"/>
+
+  <!-- Groq LLM -->
+  <rect x="250" y="690" width="400" height="62" rx="12" fill="#fbecd9" stroke="#8a5a14"/>
+  <text x="450" y="716" text-anchor="middle" font-size="17" font-weight="700" fill="#6b4208">Groq LLM</text>
+  <text x="450" y="739" text-anchor="middle" font-size="13" fill="#8a5a14">gpt-oss-20b · gpt-oss-120b · llama-3.1-8b</text>
+
+  <!-- External services -->
+  <rect x="690" y="690" width="150" height="62" rx="12" fill="#f6f6f6" stroke="#777"/>
+  <text x="765" y="716" text-anchor="middle" font-size="14.5" font-weight="600" fill="#333">Tavily</text>
+  <text x="765" y="737" text-anchor="middle" font-size="12" fill="#555">web search</text>
+  <rect x="850" y="690" width="160" height="62" rx="12" fill="#f6f6f6" stroke="#777"/>
+  <text x="930" y="716" text-anchor="middle" font-size="14.5" font-weight="600" fill="#333">HuggingFace</text>
+  <text x="930" y="737" text-anchor="middle" font-size="12" fill="#555">MiniLM embeddings</text>
+  <rect x="1020" y="690" width="150" height="62" rx="12" fill="#f6f6f6" stroke="#777"/>
+  <text x="1095" y="716" text-anchor="middle" font-size="14.5" font-weight="600" fill="#333">LangSmith</text>
+  <text x="1095" y="737" text-anchor="middle" font-size="12" fill="#555">tracing + feedback</text>
+
+  <!-- Storage -->
+  <rect x="30" y="800" width="1140" height="110" rx="14" fill="#fbeae7" stroke="#9c3a26" stroke-width="1.5"/>
+  <text x="600" y="830" text-anchor="middle" font-size="17" font-weight="700" fill="#73281a">Postgres (Supabase) · local SQLite fallback</text>
+  <g font-size="13" fill="#73281a" text-anchor="middle">
+    <rect x="55" y="848" width="120" height="40" rx="8" fill="#fff" stroke="#9c3a26"/><text x="115" y="873">users</text>
+    <rect x="190" y="848" width="150" height="40" rx="8" fill="#fff" stroke="#9c3a26"/><text x="265" y="873">conversations</text>
+    <rect x="355" y="848" width="120" height="40" rx="8" fill="#fff" stroke="#9c3a26"/><text x="415" y="873">messages</text>
+    <rect x="490" y="848" width="150" height="40" rx="8" fill="#fff" stroke="#9c3a26"/><text x="565" y="873">memories</text>
+    <rect x="655" y="848" width="170" height="40" rx="8" fill="#fff" stroke="#9c3a26"/><text x="740" y="873">LangGraph checkpoints</text>
+    <rect x="840" y="848" width="170" height="40" rx="8" fill="#fff" stroke="#9c3a26"/><text x="925" y="873">PDF indexes (FAISS)</text>
+    <rect x="1025" y="848" width="120" height="40" rx="8" fill="#fff" stroke="#9c3a26"/><text x="1085" y="873">feedback</text>
+  </g>
+
+  <!-- Storage links -->
+  <polyline points="250,163 14,163 14,855 28,855" fill="none" stroke="#555" stroke-dasharray="6 4" marker-end="url(#a)"/>
+  <line x1="120" y1="640" x2="120" y2="798" stroke="#555" stroke-dasharray="6 4" marker-end="url(#a)"/>
+
+  <!-- Legend -->
+  <line x1="40" y1="955" x2="100" y2="955" stroke="#555" marker-end="url(#a)"/>
+  <text x="110" y="960" font-size="13" fill="#444">request / control flow</text>
+  <line x1="300" y1="955" x2="360" y2="955" stroke="#555" stroke-dasharray="6 4" marker-end="url(#a)"/>
+  <text x="370" y="960" font-size="13" fill="#444">persistence (history, memory, checkpoints)</text>
+</svg>

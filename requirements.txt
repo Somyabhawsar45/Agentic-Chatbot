@@ -3,7 +3,6 @@ langgraph
 langchain_community
 langchain_core
 langchain_groq
-langchain_openai
 faiss-cpu
 streamlit
 tavily-python
@@ -11,8 +10,11 @@ pypdf
 langchain-tavily
 fastapi
 uvicorn
-streamlit-authenticator
 bcrypt
 langchain-huggingface
 langchain-text-splitters
 python-dotenv
+langgraph-checkpoint-sqlite
+langgraph-checkpoint-postgres
+psycopg[binary]
+psycopg-pool

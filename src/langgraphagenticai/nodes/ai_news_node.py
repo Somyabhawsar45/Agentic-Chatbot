@@ -2,95 +2,74 @@ from tavily import TavilyClient
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import AIMessage
 
+from src.langgraphagenticai.state.state import AINewsState
+
+
+TIME_RANGE_MAP = {"daily": "d", "weekly": "w", "monthly": "m"}
+DAYS_MAP = {"daily": 1, "weekly": 7, "monthly": 30}
+
 
 class AINewsNode:
-    def __init__(self, llm):
-        self.tavily = TavilyClient()
+    """
+    Map-reduce AI news pipeline: fetch -> summarize each article -> combine.
+
+    The node object holds only the LLM and Tavily client. All per-request data
+    flows through the graph state, so the node is safe to share between users.
+    """
+
+    def __init__(self, llm, tavily_api_key=None):
+        # api_key=None makes TavilyClient fall back to the TAVILY_API_KEY env var
+        self.tavily = TavilyClient(api_key=tavily_api_key)
         self.llm = llm
-        self.state = {}
 
     # ==========================================================
     # FETCH NEWS
     # ==========================================================
-    def fetch_news(self, state: dict) -> dict:
+    def fetch_news(self, state: AINewsState) -> dict:
         try:
-            frequency = state["messages"][0].content.lower().strip()
+            frequency = state["messages"][-1].content.lower().strip()
         except Exception:
-            return {
-                "messages": AIMessage(
-                    content="⚠️ Please select a valid timeframe (Daily / Weekly / Monthly)."
-                )
-            }
+            return {"news_data": [], "summary": "⚠️ Please select a valid timeframe (Daily / Weekly / Monthly)."}
 
-        time_range_map = {
-            "daily": "d",
-            "weekly": "w",
-            "monthly": "m",
-        }
-
-        days_map = {
-            "daily": 1,
-            "weekly": 7,
-            "monthly": 30,
-        }
-
-        if frequency not in time_range_map:
-            return {
-                "messages": AIMessage(
-                    content="⚠️ Invalid timeframe selected."
-                )
-            }
-
-        self.state["frequency"] = frequency
+        if frequency not in TIME_RANGE_MAP:
+            return {"news_data": [], "summary": "⚠️ Invalid timeframe selected."}
 
         response = self.tavily.search(
             query="Latest Artificial Intelligence (AI) news India and globally",
             topic="news",
-            time_range=time_range_map[frequency],
-            max_results=12,   # 🔴 LIMIT RESULTS
-            days=days_map[frequency],
+            time_range=TIME_RANGE_MAP[frequency],
+            max_results=12,
+            days=DAYS_MAP[frequency],
         )
 
-        self.state["news_data"] = response.get("results", [])
-        return state
+        return {"frequency": frequency, "news_data": response.get("results", [])}
 
     # ==========================================================
-    # MAP STEP — SUMMARIZE EACH ARTICLE (SAFE)
+    # MAP STEP — SUMMARIZE EACH ARTICLE, REDUCE STEP — COMBINE
     # ==========================================================
-    def summarize_news(self, state: dict) -> dict:
-        news_items = self.state.get("news_data", [])
+    def summarize_news(self, state: AINewsState) -> dict:
+        if state.get("summary"):  # fetch_news already reported a problem
+            return {"summary": state["summary"]}
 
+        news_items = state.get("news_data") or []
         if not news_items:
-            self.state["summary"] = "⚠️ No news articles found."
-            return self.state
-
-        individual_summaries = []
+            return {"summary": "⚠️ No news articles found."}
 
         map_prompt = ChatPromptTemplate.from_messages([
-            ("system",
-             "Summarize the following AI news article in 2–3 concise bullet points."),
-            ("user", "{article}")
+            ("system", "Summarize the following AI news article in 2–3 concise bullet points."),
+            ("user", "{article}"),
         ])
 
-        # 🔹 MAP: summarize each article separately
-        for item in news_items[:10]:   # 🔴 HARD LIMIT
+        individual_summaries = []
+        for item in news_items[:10]:  # hard limit to control cost/latency
             article_text = (
-                f"Title: {item.get('title','')}\n"
-                f"Content: {item.get('content','')}\n"
-                f"URL: {item.get('url','')}"
+                f"Title: {item.get('title', '')}\n"
+                f"Content: {item.get('content', '')}\n"
+                f"URL: {item.get('url', '')}"
             )
+            response = self.llm.invoke(map_prompt.format(article=article_text))
+            individual_summaries.append(f"- {response.content.strip()}")
 
-            response = self.llm.invoke(
-                map_prompt.format(article=article_text)
-            )
-
-            individual_summaries.append(
-                f"- {response.content.strip()}"
-            )
-
-        # ======================================================
-        # REDUCE STEP — FINAL SUMMARY
-        # ======================================================
         reduce_prompt = ChatPromptTemplate.from_messages([
             ("system",
              """
@@ -101,30 +80,18 @@ class AINewsNode:
              - Keep it concise
              - Use headings
              """),
-            ("user", "{summaries}")
+            ("user", "{summaries}"),
         ])
 
         final_response = self.llm.invoke(
-            reduce_prompt.format(
-                summaries="\n".join(individual_summaries)
-            )
+            reduce_prompt.format(summaries="\n".join(individual_summaries))
         )
-
-        self.state["summary"] = final_response.content
-        return self.state
+        return {"summary": final_response.content}
 
     # ==========================================================
-    # SAVE RESULT
+    # SAVE RESULT — put the report into the conversation
     # ==========================================================
-    def save_result(self, state: dict) -> dict:
-        frequency = self.state.get("frequency", "news")
-        summary = self.state.get("summary", "")
-
-        filename = f"./AINews/{frequency}_summary.md"
-
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write(f"# {frequency.capitalize()} AI News Summary\n\n")
-            f.write(summary)
-
-        self.state["filename"] = filename
-        return self.state
+    def save_result(self, state: AINewsState) -> dict:
+        frequency = state.get("frequency") or "news"
+        report = f"# {frequency.capitalize()} AI News Summary\n\n{state.get('summary', '')}"
+        return {"messages": [AIMessage(content=report)]}

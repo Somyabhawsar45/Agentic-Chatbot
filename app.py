@@ -8,6 +8,10 @@ from pathlib import Path
 import bcrypt
 import streamlit as st
 
+from src.langgraphagenticai.settings import load_settings
+
+load_settings()  # .env (local) / Streamlit secrets (cloud) -> os.environ, before anything reads them
+
 from src.langgraphagenticai.database import db_utils
 from src.langgraphagenticai.main import load_langgraph_agenticai_app
 
@@ -25,40 +29,30 @@ def render_auth_gate():
     if st.session_state.authenticated_user:
         return True  # already logged in
 
+    from src.langgraphagenticai.ui.streamlitui.theme import CSS, FONTS
+
+    st.set_page_config(page_title="Netra | Sign in", page_icon="👁", layout="wide")
+    st.markdown(FONTS + CSS, unsafe_allow_html=True)
     st.markdown(
         """
         <style>
-        .block-container {
-            padding-top: 3rem !important;
-        }
-        .auth-header {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 12px;
-            margin-bottom: 6px;
-        }
-        .auth-header img {
-            width: 40px;
-            height: 40px;
-            object-fit: contain;
-            border-radius: 10px;
-        }
-        .auth-header h1 {
-            font-size: 28px;
-            margin: 0;
-        }
-        .auth-sub {
-            text-align: center;
-            color: #888;
-            font-size: 13px;
-            margin-bottom: 1.8rem;
-        }
+        .block-container { padding-top: 9vh !important; }
+        .auth-header { display:flex; align-items:center; justify-content:center; gap:12px; margin-bottom:6px; }
+        .auth-header img { width:42px; height:42px; object-fit:contain; border-radius:12px;
+            box-shadow: 0 0 28px rgba(79,142,247,.35); }
+        .auth-header h1 { font-size:30px; margin:0; font-weight:650; letter-spacing:-.02em;
+            background: linear-gradient(90deg, #ffffff 20%, #9dc0ff 100%);
+            -webkit-background-clip:text; background-clip:text; color:transparent; }
+        .auth-sub { text-align:center; color: var(--text-3); font-size:13.5px; margin-bottom:1.8rem; }
         div[data-testid="stForm"] {
-            background-color: #111;
-            border: 0.5px solid #1e1e1e;
-            border-radius: 12px;
-            padding: 2rem;
+            background: linear-gradient(180deg, var(--surface), var(--bg-raised));
+            border: 1px solid var(--border); border-radius: 16px; padding: 2rem;
+            box-shadow: 0 20px 60px rgba(0,0,0,.45);
+        }
+        div[data-testid="stForm"] input { background: var(--bg) !important; border-radius: 10px !important; }
+        div[data-testid="stForm"] button {
+            background: linear-gradient(135deg, var(--accent), #2a5bd7) !important;
+            border: none !important; border-radius: 10px !important; color: #fff !important; font-weight: 600;
         }
         </style>
         """,

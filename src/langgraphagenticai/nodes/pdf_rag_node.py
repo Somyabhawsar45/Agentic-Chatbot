@@ -6,6 +6,8 @@ from src.langgraphagenticai.rag import pdf_rag_utils
 class PdfRagNode:
     """
     Retrieval-Augmented Generation node for PDF Q&A with multi-turn memory.
+    Answers cite page numbers, and the retrieved passages are returned as
+    `citations` so the UI can show the exact quotes under the answer.
     """
     def __init__(self, model, conversation_id):
         self.llm = model
@@ -16,30 +18,26 @@ class PdfRagNode:
         last_message = state["messages"][-1]
         question = last_message.content if hasattr(last_message, "content") else str(last_message)
 
-        # Retrieve relevant chunks from FAISS
-        chunks = pdf_rag_utils.retrieve_chunks(self.conversation_id, question, k=4)
-        context = "\n\n---\n\n".join(chunks) if chunks else "No relevant context found in the document."
+        # Retrieve relevant passages (with page numbers) from FAISS
+        passages = pdf_rag_utils.retrieve(self.conversation_id, question, k=4)
+        context = pdf_rag_utils.format_passages(passages) if passages else "No relevant context found in the document."
 
-        # Build message history with system prompt + context
         system_prompt = (
             "You are Netra, a helpful assistant answering questions about an uploaded PDF document.\n"
-            "Use ONLY the context below to answer. If the answer isn't in the context, say so clearly.\n\n"
+            "Use ONLY the context below to answer. If the answer isn't in the context, say so clearly.\n"
+            "Cite the page for each fact like this: (p. 4). Use the page numbers given in the passage labels.\n\n"
             f"Context from PDF:\n{context}"
         )
 
-        # Build full conversation history
+        # System prompt + previous turns + current question
         messages = [SystemMessage(content=system_prompt)]
-
-        # Add all previous messages except the last one (current question)
-        for msg in state["messages"][:-1]:
-            messages.append(msg)
-
-        # Add current question
+        messages.extend(state["messages"][:-1])
         messages.append(HumanMessage(content=question))
 
         response = self.llm.invoke(messages)
 
         return {
             "messages": [AIMessage(content=response.content)],
-            "context": context
+            "context": context,
+            "citations": passages,
         }

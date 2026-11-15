@@ -1,4 +1,5 @@
 from src.langgraphagenticai.state.state import State
+from src.langgraphagenticai.nodes.tool_limits import ANSWER_NOW, tools_exhausted
 
 class ChatbotWithToolNode:
     """
@@ -7,30 +8,20 @@ class ChatbotWithToolNode:
     def __init__(self,model):
         self.llm = model
 
-    def process(self, state: State) -> dict:
-        """
-        Processes the input state and generates a response with tool integration.
-        """
-        user_input = state["messages"][-1] if state["messages"] else ""
-        llm_response = self.llm.invoke([{"role": "user", "content": user_input}])
-
-        # Simulate tool-specific logic
-        tools_response = f"Tool integration for: '{user_input}'"
-
-        return {"messages": [llm_response, tools_response]}
-    
-
     def create_chatbot(self, tools):
         """
         Returns a chatbot node function.
         """
         llm_with_tools = self.llm.bind_tools(tools)
+        llm_must_answer = self.llm.bind_tools(tools, tool_choice="none")
 
         def chatbot_node(state: State):
             """
             Chatbot logic for processing the input state and returning a response.
+            After MAX_TOOL_ROUNDS searches the LLM must answer (prevents search loops).
             """
+            if tools_exhausted(state["messages"]):
+                return {"messages": [llm_must_answer.invoke(state["messages"] + [ANSWER_NOW])]}
             return {"messages": [llm_with_tools.invoke(state["messages"])]}
 
         return chatbot_node
-

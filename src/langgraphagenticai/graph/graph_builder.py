@@ -1,17 +1,52 @@
 from langgraph.graph import StateGraph
-from src.langgraphagenticai.state.state import State
+from src.langgraphagenticai.state.state import State, AINewsState
 from langgraph.graph import START,END
 from src.langgraphagenticai.nodes.basic_chatbot_node import BasicChatbotNode
 from src.langgraphagenticai.tools.search_tool import get_tools,create_tool_node
-from langgraph.prebuilt import tools_condition,ToolNode
+from langgraph.prebuilt import tools_condition
 from src.langgraphagenticai.nodes.chatbot_with_Tool_node import ChatbotWithToolNode
 from src.langgraphagenticai.nodes.ai_news_node import AINewsNode
 
 
 class GraphBuilder:
-    def __init__(self,model):
+    def __init__(self, model, tavily_api_key=None):
         self.llm=model
+        self.tavily_api_key = tavily_api_key
         self.graph_builder=StateGraph(State)
+        self.checkpointer = None  # only the Netra Agent uses LangGraph memory
+
+    def netra_agent_build_graph(self):
+        """
+        The unified Netra Agent (ReAct loop with long-term memory):
+
+            START -> agent --(tool calls?)--> tools -> agent -> ... -> END
+
+        The agent LLM decides on every turn whether to answer directly, search
+        the web, search the PDF attached to the conversation, or save a fact to
+        the user's long-term memory.
+
+        Two kinds of memory:
+          * short-term: the checkpointer stores each conversation (thread_id)
+          * long-term:  `save_memory` stores user facts shared by ALL conversations
+        """
+        from src.langgraphagenticai.nodes.netra_agent_node import NetraAgentNode
+        from src.langgraphagenticai.tools.pdf_tool import search_pdf
+        from src.langgraphagenticai.tools.memory_tool import save_memory
+        from src.langgraphagenticai.memory.checkpointer import get_checkpointer
+
+        web_tools = get_tools(self.tavily_api_key) if self.tavily_api_key else []
+        pdf_tools = [search_pdf]
+        memory_tools = [save_memory]
+
+        agent = NetraAgentNode(self.llm, web_tools=web_tools, pdf_tools=pdf_tools, memory_tools=memory_tools)
+
+        self.graph_builder.add_node("agent", agent.process)
+        self.graph_builder.add_node("tools", create_tool_node(web_tools + pdf_tools + memory_tools))
+        self.graph_builder.add_edge(START, "agent")
+        self.graph_builder.add_conditional_edges("agent", tools_condition)
+        self.graph_builder.add_edge("tools", "agent")
+
+        self.checkpointer = get_checkpointer()
 
     def basic_chatbot_build_graph(self):
         """
@@ -48,7 +83,7 @@ class GraphBuilder:
         The chatbot node is set as the entry point.
         """
         ## Define the tool and tool node
-        tools=get_tools()
+        tools=get_tools(self.tavily_api_key)
         tool_node=create_tool_node(tools)
 
         ## Define the LLM
@@ -68,8 +103,10 @@ class GraphBuilder:
 
 
     def ai_news_builder_graph(self):
+        # AI News carries its intermediate data in its own state schema
+        self.graph_builder = StateGraph(AINewsState)
 
-        ai_news_node=AINewsNode(self.llm)
+        ai_news_node=AINewsNode(self.llm, self.tavily_api_key)
 
         ## added the nodes
 
@@ -83,11 +120,49 @@ class GraphBuilder:
         self.graph_builder.add_edge("fetch_news","summarize_news")
         self.graph_builder.add_edge("summarize_news","save_result")
         self.graph_builder.add_edge("save_result", END)
-  
+
+    def deep_research_build_graph(self):
+        """
+        Multi-agent Deep Research with a human in the loop:
+
+            planner -> human_review (interrupt: user edits/approves the plan)
+                    -> researcher x N (parallel, Send API) -> writer <-> critic -> finalize
+
+        Researchers' findings are merged by the `operator.add` reducer in ResearchState.
+        `interrupt` needs a checkpointer to pause and later resume the run.
+        """
+        from src.langgraphagenticai.state.state import ResearchState
+        from src.langgraphagenticai.nodes.research_nodes import ResearchTeam
+        from src.langgraphagenticai.memory.checkpointer import get_checkpointer
+
+        team = ResearchTeam(self.llm, self.tavily_api_key)
+        self.graph_builder = StateGraph(ResearchState)
+
+        self.graph_builder.add_node("planner", team.planner)
+        self.graph_builder.add_node("human_review", team.human_review)
+        self.graph_builder.add_node("researcher", team.researcher)
+        self.graph_builder.add_node("writer", team.writer)
+        self.graph_builder.add_node("critic", team.critic)
+        self.graph_builder.add_node("finalize", team.finalize)
+
+        self.graph_builder.add_edge(START, "planner")
+        self.graph_builder.add_edge("planner", "human_review")
+        self.graph_builder.add_conditional_edges("human_review", team.dispatch, ["researcher"])
+        self.graph_builder.add_edge("researcher", "writer")
+        self.graph_builder.add_edge("writer", "critic")
+        self.graph_builder.add_conditional_edges("critic", team.after_critic, ["writer", "finalize"])
+        self.graph_builder.add_edge("finalize", END)
+
+        self.checkpointer = get_checkpointer()
+
     def setup_graph(self, usecase: str, conversation_id=None):
         """
         Sets up the graph for the selected use case.
         """
+        if usecase == "Netra Agent":
+            self.netra_agent_build_graph()
+        if usecase == "Deep Research":
+            self.deep_research_build_graph()
         if usecase == "Basic Chatbot":
             self.basic_chatbot_build_graph()
         if usecase == "Chatbot With Web":
@@ -97,4 +172,4 @@ class GraphBuilder:
         if usecase == "Chat with PDF":
             self.pdf_rag_build_graph(conversation_id)
 
-        return self.graph_builder.compile()
+        return self.graph_builder.compile(checkpointer=self.checkpointer)

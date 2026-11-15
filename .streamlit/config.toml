@@ -1,9 +1,13 @@
 [server]
 fileWatcherType = "none"
 
+[client]
+toolbarMode = "minimal"   # hides the "Deploy" button and developer menu
+
 [theme]
 base = "dark"
 backgroundColor = "#0a0a0a"
-secondaryBackgroundColor = "#0d0d0d"
+secondaryBackgroundColor = "#121214"
 primaryColor = "#4f8ef7"
-textColor = "#dddddd"
+textColor = "#e8e8ea"
+font = "sans serif"

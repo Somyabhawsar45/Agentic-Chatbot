@@ -1,21 +1,32 @@
-import re
+import base64
+import html
 import os
-import tempfile
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
+from pathlib import Path
 
 import streamlit as st
+
 from src.langgraphagenticai.ui.uiconfigfile import Config
 from src.langgraphagenticai.database import db_utils
+from src.langgraphagenticai.ui.streamlitui.modes import NAV_ORDER, mode
+from src.langgraphagenticai.ui.streamlitui.theme import CSS, FONTS, html_block
 
-# (internal_usecase_value, material_icon_name, display_label)
-NAV_ITEMS = [
-    ("Basic Chatbot",     "chat",        "Basic Chatbot"),
-    ("Chatbot With Web",  "public",      "Web Search"),
-    ("Chat with PDF",     "description", "Chat With PDF"),
-    ("AI News",           "newspaper",   "News Summary"),
-]
-
+# (internal_usecase_value, material_icon_name, display_label) — kept for compatibility
+NAV_ITEMS = [(u, mode(u)["icon"], mode(u)["label"]) for u in NAV_ORDER]
 USECASE_LABELS = {v: label for v, _, label in NAV_ITEMS}
+
+WEB_MODES = ["Chatbot With Web", "AI News", "Netra Agent", "Deep Research"]
+LOGO_PATH = Path(__file__).resolve().parents[4] / "assets" / "logo.png"
+
+
+def get_default_secret(name: str) -> str:
+    """App-owned key from Streamlit secrets, falling back to an env var / .env."""
+    try:
+        value = st.secrets.get(name, "")
+    except Exception:  # no secrets.toml when running locally
+        value = ""
+    return value or os.environ.get(name, "")
 
 
 def slugify(value: str) -> str:
@@ -27,34 +38,43 @@ def truncate(text: str, n: int = 24) -> str:
     return text if len(text) <= n else text[: n - 1].rstrip() + "…"
 
 
-def relative_time(ts) -> str:
-    """Best-effort relative time. Returns '' if ts is missing/unparseable."""
-    if not ts:
-        return ""
+def _parse_ts(ts):
     try:
-        if isinstance(ts, (int, float)):
-            dt = datetime.fromtimestamp(ts)
-        elif isinstance(ts, str):
-            dt = datetime.fromisoformat(ts.replace("Z", ""))
-        else:
-            return ""
-        secs = (datetime.now() - dt).total_seconds()
-        if secs < 60:
-            return "Just Now"
-        mins = int(secs // 60)
-        if mins < 60:
-            return f"{mins} Minute{'s' if mins != 1 else ''} Ago"
-        hours = int(mins // 60)
-        if hours < 24:
-            return f"{hours} Hour{'s' if hours != 1 else ''} Ago"
-        days = int(hours // 24)
-        return f"{days} Day{'s' if days != 1 else ''} Ago"
+        return datetime.fromisoformat(str(ts).replace("Z", ""))
     except Exception:
-        return ""
+        return None
 
 
-def get_timestamp(convo: dict):
-    return convo.get("created_at") or convo.get("updated_at") or convo.get("timestamp")
+def group_by_date(conversations: list) -> list:
+    """[(group_name, [convo, ...]), ...] in ChatGPT-style buckets, newest first."""
+    today = datetime.now().date()
+    buckets = {"Today": [], "Yesterday": [], "Previous 7 days": [], "Older": []}
+    for c in conversations:
+        dt = _parse_ts(c.get("created_at"))
+        d = dt.date() if dt else None
+        if d == today:
+            buckets["Today"].append(c)
+        elif d == today - timedelta(days=1):
+            buckets["Yesterday"].append(c)
+        elif d and d >= today - timedelta(days=7):
+            buckets["Previous 7 days"].append(c)
+        else:
+            buckets["Older"].append(c)
+    return [(name, items) for name, items in buckets.items() if items]
+
+
+def chat_as_markdown(usecase: str, history: list) -> str:
+    lines = [f"# Netra · {mode(usecase)['label']}", f"_Exported {datetime.now():%Y-%m-%d %H:%M}_", ""]
+    for role, content in history:
+        lines += [f"### {'You' if role == 'user' else 'Netra'}", content, ""]
+    return "\n".join(lines)
+
+
+def reset_conversation_state():
+    st.session_state.chat_history = []
+    st.session_state.current_conversation_id = None
+    st.session_state.pdf_indexed_for = None
+    st.session_state.research_pending = None
 
 
 class LoadStreamlitUI:
@@ -64,553 +84,76 @@ class LoadStreamlitUI:
 
     # ------------------------------------------------------------------
     def load_streamlit_ui(self):
-        from pathlib import Path
         from PIL import Image
-
-        logo_path = Path(__file__).resolve().parents[4] / "assets" / "logo.png"
-        page_icon = Image.open(logo_path) if logo_path.exists() else "🤖"
 
         st.set_page_config(
             page_title="Netra | Agentic AI",
-            page_icon=page_icon,
+            page_icon=Image.open(LOGO_PATH) if LOGO_PATH.exists() else "🤖",
             layout="wide",
             initial_sidebar_state="expanded",
         )
-
         db_utils.init_db()
 
         # ---------------- SESSION DEFAULTS ----------------
-        if "timeframe" not in st.session_state:
-            st.session_state.timeframe = ""
-        if "IsFetchButtonClicked" not in st.session_state:
-            st.session_state.IsFetchButtonClicked = False
-        if "current_conversation_id" not in st.session_state:
-            st.session_state.current_conversation_id = None
-        if "active_usecase" not in st.session_state:
-            st.session_state.active_usecase = None
-        if "chat_history" not in st.session_state:
-            st.session_state.chat_history = []
-        if "pdf_indexed_for" not in st.session_state:
-            st.session_state.pdf_indexed_for = None
-        if "selected_usecase_value" not in st.session_state:
-            st.session_state.selected_usecase_value = NAV_ITEMS[0][0]
+        defaults = {
+            "timeframe": "",
+            "IsFetchButtonClicked": False,
+            "current_conversation_id": None,
+            "active_usecase": None,
+            "chat_history": [],
+            "pdf_indexed_for": None,
+            "selected_usecase_value": NAV_ORDER[0],
+            "pending_prompt": None,
+            "research_pending": None,
+            "run_ids": {},
+        }
+        for key, value in defaults.items():
+            if key not in st.session_state:
+                st.session_state[key] = value
 
-        self._inject_fonts()
+        st.markdown(FONTS + CSS, unsafe_allow_html=True)
 
-        self._inject_css()
+        if st.session_state.get("pending_toast"):
+            st.toast(st.session_state.pending_toast)
+            st.session_state.pending_toast = None
 
         # ---------------- SIDEBAR ----------------
         with st.sidebar:
             self._render_logo()
-
-            if st.button("Sign Out", icon=":material/logout:", use_container_width=True):
-                st.session_state.authenticated_user = None
-                st.session_state.chat_history = []
-                st.session_state.current_conversation_id = None
-                st.rerun()
-
             self._render_new_chat()
             self._render_usecase_nav()
-            self._render_active_usecase_controls()
             self._render_history()
-            self._render_settings()
+            st.markdown("<hr/>", unsafe_allow_html=True)
+            self._render_account_menu()      # user chip -> memory + sign out
             self._render_version_footer()
+
+        # ---------------- TOP BAR (main area) ----------------
+        self._render_topbar()
 
         return self.user_controls
 
     # ------------------------------------------------------------------
-    def _inject_fonts(self):
-        st.markdown(
-            """
-            <link rel="preconnect" href="https://fonts.googleapis.com">
-            <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-            <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20,400,0,0" />
-            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css" />
-            """,
-            unsafe_allow_html=True,
-        )
-
-    def _inject_css(self):
-        st.markdown(
-            """
-            <style>
-            :root{
-                --bg:#0a0a0a;
-                --sidebar-bg:#0d0d0d;
-                --accent:#4f8ef7;
-                --border:#1e1e1e;
-                --border-soft:#181818;
-                --border-faint:#2a2a2a;
-                --text-dim:#666;
-                --text-dimmer:#555;
-                --text-faint:#444;
-                --text-version:#333;
-            }
-            header[data-testid="stHeader"] {
-    background-color: #0a0a0a !important;
-}
-
-.stApp {
-    background-color: #0a0a0a !important;
-}
-
-[data-testid="stBottomBlockContainer"],
-[data-testid="stBottom"] {
-    background-color: #0a0a0a !important;
-}
-
-            html, body, .stApp, [class*="css"] {
-                font-family: 'Inter', sans-serif !important;
-                background-color: var(--bg) !important;
-            }
-
-            #MainMenu, footer { visibility: hidden; }
-
-            .material-symbols-outlined{
-                font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
-                vertical-align: middle;
-                font-size: 18px;
-            }
-
-            /* ---------- SIDEBAR BASE ---------- */
-            section[data-testid="stSidebar"] {
-                background-color: #0d0d0d !important;
-                border-right: 0.5px solid var(--border-soft);
-                width: 220px !important;
-                min-width: 220px !important;
-            }
-            section[data-testid="stSidebar"] > div{
-                background-color: #0d0d0d !important;
-                padding-top: 1rem;
-            }
-            section[data-testid="stSidebar"] hr{
-                border-color: var(--border-soft);
-                margin: 10px 0;
-            }
-            .sidebar-label{
-                font-size: 11px;
-                font-weight: 600;
-                letter-spacing: 0.04em;
-                color: var(--text-dimmer);
-                text-transform: capitalize;
-                margin: 14px 0 6px 4px;
-            }
-
-            /* ---------- LOGO ---------- */
-            .sidebar-logo-wrap{
-                padding: 4px 4px 12px 4px;
-            }
-            .sidebar-logo-row{
-                display:flex;
-                align-items:center;
-                gap:8px;
-            }
-           .sidebar-logo-row i{
-                color: var(--accent);
-                font-size: 19px;
-            }
-            .sidebar-logo-img{
-                width: 24px;
-                height: 24px;
-                object-fit: contain;
-                border-radius: 6px;
-            }
-            .sidebar-logo-text{
-                font-size: 18px;
-                font-weight: 500;
-                color: #fff;
-            }
-            .sidebar-logo-tagline{
-                font-size: 11px;
-                color: var(--text-faint);
-                margin: 2px 0 0 27px;
-            }
-            .sidebar-logo-divider{
-                border: none;
-                border-top: 0.5px solid var(--border-soft);
-                margin: 12px 0 14px 0;
-            }
-
-            /* ---------- NEW CHAT (ghost button) ---------- */
-            div[class*="st-key-newchat_wrap"] button{
-                background-color: transparent !important;
-                border: 0.5px solid var(--border-faint) !important;
-                color: #ccc !important;
-                border-radius: 8px !important;
-                font-weight: 500;
-                text-transform: capitalize;
-            }
-            div[class*="st-key-newchat_wrap"] button:hover{
-                border-color: var(--accent) !important;
-                color: #fff !important;
-            }
-
-            /* ---------- USE CASE NAV ITEMS ---------- */
-            div[class*="st-key-navitem_"] button{
-                background-color: transparent !important;
-                border: none !important;
-                justify-content: flex-start !important;
-                color: var(--text-dimmer) !important;
-                font-weight: 500;
-                border-radius: 8px !important;
-                padding: 8px 10px !important;
-                text-transform: capitalize;
-            }
-            div[class*="st-key-navitem_"] button *{
-                color: var(--text-dimmer) !important;
-            }
-            div[class*="st-key-navitem_"] button [data-testid="stIconMaterial"],
-            div[class*="st-key-navitem_"] button svg{
-                color: var(--text-dim) !important;
-                fill: var(--text-dim) !important;
-            }
-            div[class*="st-key-navitem_"] button:hover{
-                background-color: #111 !important;
-            }
-
-           /* ---------- SETTINGS EXPANDER (muted, low priority) ---------- */
-            section[data-testid="stSidebar"] details{
-                background-color: transparent !important;
-                border: 0.5px solid var(--border-soft) !important;
-                border-radius: 8px !important;
-                opacity: 0.75;
-            }
-            section[data-testid="stSidebar"] details:hover{
-                opacity: 1;
-            }
-            section[data-testid="stSidebar"] summary{
-                color: var(--text-dim) !important;
-                font-size: 12px !important;
-                text-transform: capitalize;
-            }
-            section[data-testid="stSidebar"] summary span{
-                font-size: 12px !important;
-            }
-            section[data-testid="stSidebar"] input,
-            section[data-testid="stSidebar"] textarea{
-                background-color: #0a0a0a !important;
-                color: #ccc !important;
-                border: 0.5px solid var(--border-faint) !important;
-                border-radius: 6px !important;
-            }
-            section[data-testid="stSidebar"] div[data-baseweb="select"] > div{
-                background-color: #0a0a0a !important;
-                border: 0.5px solid var(--border-faint) !important;
-                border-radius: 6px !important;
-                color: #ccc !important;
-            }
-
-            /* ---------- HISTORY ---------- */
-            div[class*="st-key-histitem_"] button{
-                background-color: transparent !important;
-                border: none !important;
-                color: #888 !important;
-                font-size: 13px;
-                justify-content: flex-start !important;
-                padding: 6px 8px !important;
-                text-transform: capitalize;
-            }
-            div[class*="st-key-histitem_"] button:hover{
-                background-color: #111 !important;
-                color: #ccc !important;
-            }
-            div[class*="st-key-histdel_"] button{
-                background-color: transparent !important;
-                border: none !important;
-                color: var(--text-dimmer) !important;
-                padding: 2px !important;
-            }
-            div[class*="st-key-histdel_"] button:hover{
-                color: #e05a5a !important;
-            }
-            .hist-ts{
-                font-size: 10px;
-                color: var(--text-faint);
-                margin: -6px 0 8px 10px;
-            }
-
-            /* ---------- VERSION FOOTER ---------- */
-            .version-footer{
-                font-size: 10.5px;
-                color: var(--text-version);
-                padding: 14px 6px 6px 6px;
-                text-transform: capitalize;
-            }
-
-            /* ---------- TOPBAR ---------- */
-            .topbar{
-                display:flex;
-                align-items:center;
-                justify-content:space-between;
-                background-color:#111;
-                border:0.5px solid #1e1e1e;
-                border-radius:10px;
-                padding:10px 16px;
-                margin-bottom:18px;
-            }
-            .topbar-left{
-                display:flex;
-                align-items:center;
-                gap:8px;
-                color:#ddd;
-                font-weight:500;
-                font-size:14px;
-                text-transform: capitalize;
-            }
-            .topbar-left .material-symbols-outlined{ color: var(--accent); }
-            .topbar-pill{
-                font-size:11px;
-                color: #666;
-                background-color:#111;
-                border:0.5px solid #2a2a2a;
-                border-radius:20px;
-                padding:4px 12px;
-            }
-
-            /* ---------- WELCOME SCREEN ---------- */
-            .welcome-wrap{
-                display:flex;
-                flex-direction:column;
-                align-items:center;
-                justify-content:center;
-                min-height: 68vh;
-                padding: 0 1rem;
-            }
-            .welcome-title{
-                font-size:24px;
-                font-weight:400;
-                color:#fff;
-                text-align:center;
-                margin-bottom:6px;
-                text-transform: capitalize;
-            }
-            .welcome-sub{
-                font-size:12px;
-                color: var(--text-faint);
-                text-align:center;
-                margin-bottom:2.4rem;
-                text-transform: capitalize;
-            }
-            .welcome-grid{
-                display:grid;
-                grid-template-columns: repeat(2, 1fr);
-                gap:12px;
-                width:100%;
-                max-width:520px;
-            }
-            .welcome-card{
-                background-color: var(--sidebar-bg);
-                border: 0.5px solid #1e1e1e;
-                border-radius:9px;
-                padding:16px;
-                display:flex;
-                align-items:center;
-                gap:12px;
-                transition: border-color 0.2s, box-shadow 0.2s;
-            }
-            .welcome-card:hover{
-                border-color: var(--accent);
-                box-shadow: 0 0 12px rgba(79,142,247,0.12);
-            }
-            .welcome-card .material-symbols-outlined{
-                color: var(--accent);
-                font-size:20px;
-            }
-            .welcome-card-title{
-                font-size:13px;
-                font-weight:500;
-                color:#ddd;
-                text-transform: capitalize;
-            }
-
-            /* ---------- CHAT BUBBLES ---------- */
-            .msg-row{ display:flex; margin-bottom:14px; align-items:flex-start; gap:10px; }
-            .msg-row.msg-user{ justify-content:flex-end; }
-            .avatar-ai{
-                width:28px; height:28px;
-                background-color:#0d1d3a;
-                border-radius:6px;
-                display:flex; align-items:center; justify-content:center;
-                flex-shrink:0;
-            }
-            .avatar-ai .material-symbols-outlined{ color: var(--accent); font-size:16px; }
-            .bubble{
-                max-width:85%;
-                padding:10px 14px;
-                border-radius:10px;
-                font-size:14px;
-                line-height:1.55;
-            }
-            .bubble-ai{
-                background-color:#111;
-                max-width:85%;
-                border:0.5px solid #1e1e1e;
-                color:#ccc;
-            }
-            .bubble-user{
-                background-color:#0d1d3a;
-                border:0.5px solid #1a3560;
-                color:#a8c8f8;
-            }
-
-            /* ---------- THINKING DOTS ---------- */
-            .thinking-dots{ display:flex; gap:6px; padding:6px 0 14px 38px; }
-            .thinking-dots span{
-                width:7px; height:7px; border-radius:50%;
-                background-color: var(--accent);
-                animation: tdBounce 1.2s infinite ease-in-out;
-            }
-            .thinking-dots span:nth-child(2){ animation-delay:0.15s; }
-            .thinking-dots span:nth-child(3){ animation-delay:0.3s; }
-            @keyframes tdBounce{
-                0%,80%,100%{ transform:scale(0.6); opacity:0.4; }
-                40%{ transform:scale(1); opacity:1; }
-            }
-
-            /* ---------- CHAT INPUT ---------- */
-            [data-testid="stChatInput"]{
-                background-color: var(--sidebar-bg) !important;
-                border: 0.5px solid var(--border-faint) !important;
-                border-radius: 10px !important;
-            }
-            [data-testid="stChatInput"] textarea{
-                color: #ddd !important;
-                background-color: transparent !important;
-            }
-            [data-testid="stChatInput"]:focus-within{
-                border-color: var(--accent) !important;
-            }
-            button[data-testid="stChatInputSubmitButton"]{
-                background-color: var(--accent) !important;
-                border-radius: 6px !important;
-            }
-            button[data-testid="stChatInputSubmitButton"] svg{
-                fill: #fff !important;
-            }
-            /* ---------- MARKDOWN TABLES INSIDE AI BUBBLES ---------- */
-            .bubble-ai table{
-                width: 100%;
-                border-collapse: collapse;
-                margin: 8px 0;
-                font-size: 13px;
-            }
-            .bubble-ai th, .bubble-ai td{
-                border: 0.5px solid #2a2a2a;
-                padding: 6px 10px;
-                text-align: left;
-            }
-            .bubble-ai th{
-                background-color: #161616;
-                color: #ddd;
-            }
-            .bubble-ai td{
-                color: #ccc;
-            }
-            .bubble-ai code{
-                background-color: #161616;
-                padding: 2px 6px;
-                border-radius: 4px;
-                font-size: 12px;
-            }
-            /* ---------- SCALE MARKDOWN HEADINGS INSIDE AI BUBBLES ---------- */
-            .bubble-ai h1{
-                font-size: 19px !important;
-                margin: 10px 0 8px 0 !important;
-                color: #fff;
-            }
-            .bubble-ai h2{
-                font-size: 17px !important;
-                margin: 10px 0 6px 0 !important;
-                color: #fff;
-            }
-            .bubble-ai h3{
-                font-size: 15px !important;
-                margin: 8px 0 6px 0 !important;
-                color: #ddd;
-            }
-            .bubble-ai p, .bubble-ai li{
-                font-size: 14px !important;
-                line-height: 1.55 !important;
-                color: #ccc;
-            }
-            .bubble-ai ul, .bubble-ai ol{
-                margin: 6px 0 !important;
-                padding-left: 20px !important;
-            }
-            .bubble-ai blockquote{
-                border-left: 2px solid #2a2a2a;
-                padding-left: 12px;
-                margin: 8px 0;
-                color: #999;
-                font-style: italic;
-            }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-
     def _render_logo(self):
-        import base64
-        from pathlib import Path
-
-        logo_path = Path(__file__).resolve().parents[4] / "assets" / "logo.png"
         logo_html = ""
-        if logo_path.exists():
-            encoded = base64.b64encode(logo_path.read_bytes()).decode()
+        if LOGO_PATH.exists():
+            encoded = base64.b64encode(LOGO_PATH.read_bytes()).decode()
             logo_html = f'<img src="data:image/png;base64,{encoded}" class="sidebar-logo-img" />'
-        else:
-            logo_html = '<i class="ti ti-eye"></i>'
-
-        st.markdown(
-            f"""
-            <div class="sidebar-logo-wrap">
-                <div class="sidebar-logo-row">
-                    {logo_html}
-                    <span class="sidebar-logo-text">Netra</span>
-                </div>
-                <div class="sidebar-logo-tagline">See Beyond.</div>
-            </div>
-            <hr class="sidebar-logo-divider" />
-            """,
+        st.markdown(html_block(
+            f"""<div class="sidebar-logo-wrap"><div class="sidebar-logo-row">{logo_html}
+            <span class="sidebar-logo-text">Netra</span></div>
+            <div class="sidebar-logo-tagline">See Beyond.</div></div>"""),
             unsafe_allow_html=True,
         )
 
     def _render_new_chat(self):
         with st.container(key="newchat_wrap"):
-            if st.button("New Chat", icon=":material/add:", key="new_chat_btn", use_container_width=True):
-                st.session_state.chat_history = []
-                st.session_state.current_conversation_id = None
-                st.session_state.pdf_indexed_for = None
+            if st.button("New chat", icon=":material/add:", key="new_chat_btn", use_container_width=True):
+                reset_conversation_state()
                 st.rerun()
 
-    def _render_settings(self):
-        st.markdown("<hr/>", unsafe_allow_html=True)
-        with st.expander("⚙ Settings", expanded=False):
-            llm_options = self.config.get_llm_options()
-            self.user_controls["selected_llm"] = st.selectbox("LLM", llm_options)
-
-            if self.user_controls["selected_llm"] == "Groq":
-                self.user_controls["selected_groq_model"] = st.selectbox(
-                    "Model", self.config.get_groq_model_options()
-                )
-                st.session_state["selected_groq_model"] = self.user_controls["selected_groq_model"]
-
-                self.user_controls["GROQ_API_KEY"] = st.session_state["GROQ_API_KEY"] = st.text_input(
-                    "Groq API Key", type="password", value=st.session_state.get("GROQ_API_KEY", "")
-                )
-                if not self.user_controls["GROQ_API_KEY"]:
-                    st.warning("Enter your Groq API key to continue")
-
-            if st.session_state.selected_usecase_value in ["Chatbot With Web", "AI News"]:
-                default_tavily_key = st.session_state.get("TAVILY_API_KEY") or st.secrets.get("TAVILY_API_KEY", "")
-                self.user_controls["TAVILY_API_KEY"] = st.session_state["TAVILY_API_KEY"] = st.text_input(
-                    "Tavily API Key", type="password", value=default_tavily_key
-                )
-                os.environ["TAVILY_API_KEY"] = self.user_controls["TAVILY_API_KEY"] or ""
-                if not self.user_controls["TAVILY_API_KEY"]:
-                    st.warning("Enter your Tavily API key to continue")
+    # ------------------------------------------------------------------
     def _render_usecase_nav(self):
-        st.markdown('<div class="sidebar-label">Use Cases</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sidebar-label">Modes</div>', unsafe_allow_html=True)
 
         for internal_value, icon, label in NAV_ITEMS:
             slug = slugify(internal_value)
@@ -619,130 +162,229 @@ class LoadStreamlitUI:
                     st.session_state.selected_usecase_value = internal_value
                     st.rerun()
 
-        # active highlight (emitted after generic rules so it wins)
+        # active highlight (emitted after the generic rules so it wins)
         active_slug = slugify(st.session_state.selected_usecase_value)
-        st.markdown(
-            f"""
-            <style>
-            div[class*="st-key-navitem_{active_slug}"] button[kind]{{
-                background-color:#0d1d3a !important;
+        st.markdown(html_block(
+            f"""<style>
+            div[class*="st-key-navitem_{active_slug}"] button{{
+                background: var(--accent-soft) !important;
+                box-shadow: inset 2px 0 0 var(--accent);
             }}
-            div[class*="st-key-navitem_{active_slug}"] button[kind] *{{
-                color: var(--accent) !important;
+            div[class*="st-key-navitem_{active_slug}"] button p,
+            div[class*="st-key-navitem_{active_slug}"] button span,
+            div[class*="st-key-navitem_{active_slug}"] button [data-testid="stIconMaterial"]{{
+                color: #dfe9ff !important;
             }}
-            div[class*="st-key-navitem_{active_slug}"] button[kind] svg{{
-                fill: var(--accent) !important;
-            }}
-            </style>
-            """,
+            </style>"""),
             unsafe_allow_html=True,
         )
 
         self.user_controls["selected_usecase"] = st.session_state.selected_usecase_value
 
-        # ---- detect usecase switch -> force new conversation ----
+        # ---- usecase switch -> fresh conversation ----
         if st.session_state.active_usecase is None:
             st.session_state.active_usecase = self.user_controls["selected_usecase"]
         elif st.session_state.active_usecase != self.user_controls["selected_usecase"]:
             st.session_state.active_usecase = self.user_controls["selected_usecase"]
-            st.session_state.chat_history = []
-            st.session_state.current_conversation_id = None
-            st.session_state.pdf_indexed_for = None
+            reset_conversation_state()
 
-    def _render_active_usecase_controls(self):
-        usecase = self.user_controls["selected_usecase"]
-
-        if usecase == "AI News":
-            st.markdown('<div class="sidebar-label">News Options</div>', unsafe_allow_html=True)
-            time_frame = st.selectbox("Time Frame", ["Daily", "Weekly", "Monthly"], index=0)
-            if st.button("Fetch Latest AI News", icon=":material/search:", use_container_width=True):
-                st.session_state.IsFetchButtonClicked = True
-                st.session_state.timeframe = time_frame
-
-        elif usecase == "Chat with PDF":
-            from src.langgraphagenticai.rag import pdf_rag_utils
-
-            st.markdown('<div class="sidebar-label">Upload PDF</div>', unsafe_allow_html=True)
-            uploaded_file = st.file_uploader("Choose a PDF", type=["pdf"], label_visibility="collapsed")
-
-            if uploaded_file is not None:
-                already_indexed = st.session_state.get("pdf_indexed_for") == uploaded_file.name
-
-                if not already_indexed:
-                    with st.spinner("Reading and indexing PDF..."):
-                        try:
-                            if st.session_state.current_conversation_id is None:
-                                user_id = st.session_state.authenticated_user["id"]
-                                title = db_utils.make_title(uploaded_file.name)
-                                new_id = db_utils.create_conversation(user_id, "Chat with PDF", title)
-                                st.session_state.current_conversation_id = new_id
-
-                            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                                tmp.write(uploaded_file.getbuffer())
-                                tmp_path = tmp.name
-
-                            pdf_rag_utils.build_index(tmp_path, st.session_state.current_conversation_id)
-                            os.remove(tmp_path)
-
-                            st.session_state.pdf_indexed_for = uploaded_file.name
-                            st.success(f"Indexed: {uploaded_file.name}")
-                        except Exception as e:
-                            st.error(f"Failed to index PDF: {e}")
-                else:
-                    st.success(f"Indexed: {uploaded_file.name}")
-            else:
-                st.caption("Upload a PDF to start asking questions about it.")
-
+    # ------------------------------------------------------------------
     def _render_history(self):
-        st.markdown("<hr/>", unsafe_allow_html=True)
-        st.markdown('<div class="sidebar-label">History</div>', unsafe_allow_html=True)
-
         user_id = st.session_state.authenticated_user["id"]
         conversations = db_utils.get_conversations(user_id, self.user_controls["selected_usecase"])
 
+        st.markdown('<div class="sidebar-label">History</div>', unsafe_allow_html=True)
         if not conversations:
-            st.caption("No past conversations yet.")
+            st.markdown('<div class="hist-empty">Your chats in this mode will appear here.</div>',
+                        unsafe_allow_html=True)
             return
 
-        for convo in conversations:
-            convo_id = convo["id"]
-            is_active = st.session_state.current_conversation_id == convo_id
+        if len(conversations) > 8:
+            with st.container(key="histsearch"):
+                query = st.text_input(
+                    "Search chats", key="hist_query", placeholder="Search chats…", label_visibility="collapsed"
+                ).strip().lower()
+            if query:
+                conversations = [c for c in conversations if query in (c["title"] or "").lower()]
+                if not conversations:
+                    st.markdown('<div class="hist-empty">No matching chats.</div>', unsafe_allow_html=True)
+                    return
 
-            with st.container(key=f"histitem_{convo_id}"):
-                c1, c2 = st.columns([5, 1])
-                with c1:
-                    if st.button(truncate(convo["title"]), key=f"convo_{convo_id}", use_container_width=True):
-                        st.session_state.current_conversation_id = convo_id
-                        st.session_state.chat_history = db_utils.get_messages(convo_id)
-                        st.rerun()
-                with c2:
-                    with st.container(key=f"histdel_{convo_id}"):
-                        if st.button("", icon=":material/delete:", key=f"del_{convo_id}"):
-                            db_utils.delete_conversation(convo_id)
-                            if is_active:
-                                st.session_state.chat_history = []
-                                st.session_state.current_conversation_id = None
-                            st.rerun()
+        with st.container(key="histlist"):
+            for group, items in group_by_date(conversations[:40]):
+                st.markdown(f"<div class='hist-group'>{group}</div>", unsafe_allow_html=True)
+                for convo in items:
+                    self._render_history_item(convo)
 
-            rel = relative_time(get_timestamp(convo))
-            if rel:
-                st.markdown(f"<div class='hist-ts'>{rel}</div>", unsafe_allow_html=True)
+    def _render_history_item(self, convo: dict):
+        """One clean row per chat (rename/delete live in ⚙ Settings → This chat)."""
+        convo_id = convo["id"]
+        is_active = st.session_state.current_conversation_id == convo_id
+        state = "on" if is_active else "off"
 
-            if is_active:
-                st.markdown(
-                    f"""
-                    <style>
-                    div[class*="st-key-histitem_{convo_id}"] button{{
-                        color: var(--accent) !important;
-                    }}
-                    </style>
-                    """,
+        with st.container(key=f"histitem_{state}_{convo_id}"):
+            if st.button(truncate(convo["title"], 34), key=f"convo_{convo_id}", use_container_width=True,
+                         help=convo["title"]):
+                reset_conversation_state()
+                st.session_state.current_conversation_id = convo_id
+                st.session_state.chat_history = db_utils.get_messages(convo_id)
+                st.rerun()
+
+    # ------------------------------------------------------------------
+    def _render_account_menu(self):
+        """User chip that opens a menu: long-term memory + sign out."""
+        user = st.session_state.authenticated_user
+        user_id = user["id"]
+        display_name = user.get("name") or user.get("username") or "You"
+        initials = "".join(part[0] for part in display_name.split()[:2]).upper() or "U"
+        memories = db_utils.get_memories(user_id)
+
+        with st.container(key="account"):
+            with st.popover(f"{initials}   {truncate(display_name, 20)}", use_container_width=True):
+                st.markdown(html_block(
+                    f"""<div class="user-chip"><div class="user-avatar">{html.escape(initials)}</div>
+                    <div><div class="user-name">{html.escape(display_name)}</div>
+                    <div class="user-handle">@{html.escape(user.get('username', ''))}</div></div></div>"""),
                     unsafe_allow_html=True,
                 )
 
+                st.markdown(f'<div class="menu-label">🧠 What Netra remembers · {len(memories)}</div>',
+                            unsafe_allow_html=True)
+                if not memories:
+                    st.caption("Nothing yet. Tell the Netra Agent about yourself, e.g. "
+                               "*“Remember I'm a backend developer”*.")
+                for m in memories:
+                    c1, c2 = st.columns([9, 1], vertical_alignment="center")
+                    c1.markdown(f"<div class='mem-item'>{html.escape(m['content'])}</div>", unsafe_allow_html=True)
+                    with c2:
+                        with st.container(key=f"memdel_{m['id']}"):
+                            if st.button("✕", key=f"memx_{m['id']}", help="Forget this"):
+                                db_utils.delete_memory(user_id, m["id"])
+                                st.rerun()
+                if memories and st.button("Forget everything", key="mem_clear", icon=":material/delete_sweep:",
+                                          use_container_width=True):
+                    db_utils.clear_memories(user_id)
+                    st.rerun()
+
+                st.divider()
+                if st.button("Sign out", icon=":material/logout:", key="signout_btn", use_container_width=True):
+                    st.session_state.authenticated_user = None
+                    reset_conversation_state()
+                    st.rerun()
+
     def _render_version_footer(self):
-        model = st.session_state.get("selected_groq_model", "gpt-oss-20b")
-        st.markdown(
-            f'<div class="version-footer">Groq · {model} · V2.0</div>',
-            unsafe_allow_html=True,
+        from src.langgraphagenticai.settings import tracing_enabled
+
+        storage = "Cloud DB" if db_utils.use_postgres() else "Local DB"
+        tracing = " · LangSmith" if tracing_enabled() else ""
+        st.markdown(f'<div class="version-footer">Netra v3 · {storage}{tracing}</div>', unsafe_allow_html=True)
+
+    # ------------------------------------------------------------------
+    def _render_topbar(self):
+        usecase = self.user_controls["selected_usecase"]
+        info = mode(usecase)
+        model_options = self.config.get_groq_model_options()
+        model_name = st.session_state.get("selected_groq_model") or model_options[0]
+
+        chips = ""
+        if info.get("pdf"):
+            pdf_name = db_utils.get_pdf_filename(st.session_state.current_conversation_id)
+            if pdf_name:
+                chips += (f'<span class="chip"><span class="material-symbols-outlined">attach_file</span>'
+                          f'{html.escape(truncate(pdf_name, 28))}</span>')
+
+        with st.container(key="topbar"):
+            left, right = st.columns([5, 1.6], vertical_alignment="center")
+            with left:
+                st.markdown(html_block(
+                    f"""<div class="topbar-left">
+                        <div class="topbar-icon"><span class="material-symbols-outlined">{info['icon']}</span></div>
+                        <div><div class="topbar-title">{info['label']}{chips}</div>
+                        <div class="topbar-sub">Groq · {html.escape(model_name)}</div></div>
+                    </div>"""),
+                    unsafe_allow_html=True,
+                )
+            with right:
+                with st.popover("⚙  Settings", use_container_width=True):
+                    self._render_settings_body(usecase, model_options)
+
+    def _render_settings_body(self, usecase: str, model_options: list):
+        self.user_controls["selected_llm"] = "Groq"
+        self.user_controls["selected_groq_model"] = st.selectbox(
+            "Model", model_options, key="selected_groq_model"
         )
+
+        self.user_controls["GROQ_API_KEY"] = self._api_key_input("Groq API Key", "GROQ_API_KEY")
+        # True when the visitor relies on the app's own key -> daily limit applies
+        builtin = not st.session_state.get("user_GROQ_API_KEY", "").strip()
+        self.user_controls["GROQ_API_KEY_IS_BUILTIN"] = builtin
+        if builtin and self.user_controls["GROQ_API_KEY"]:
+            from src.langgraphagenticai.settings import daily_message_limit
+            used = db_utils.count_user_messages_today(st.session_state.authenticated_user["id"])
+            st.caption(f"Demo key · {used}/{daily_message_limit()} messages used today")
+
+        if usecase in WEB_MODES:
+            self.user_controls["TAVILY_API_KEY"] = self._api_key_input(
+                "Tavily API Key", "TAVILY_API_KEY", required=(usecase != "Netra Agent")
+            )
+
+        if usecase == "Deep Research":
+            st.toggle("Review the plan before agents start", value=True, key="research_review")
+
+        self._render_chat_options(usecase)
+
+    def _render_chat_options(self, usecase: str):
+        """Rename / export / delete the open chat (kept out of the history list for a clean sidebar)."""
+        convo_id = st.session_state.current_conversation_id
+        if convo_id is None:
+            return
+        st.markdown('<div class="menu-label">This chat</div>', unsafe_allow_html=True)
+
+        user_id = st.session_state.authenticated_user["id"]
+        current = next((c for c in db_utils.get_conversations(user_id, usecase) if c["id"] == convo_id), None)
+        if current:
+            new_title = st.text_input("Name", value=current["title"], key=f"rename_{convo_id}")
+            if new_title.strip() and new_title.strip() != current["title"]:
+                if st.button("Save name", key=f"rensave_{convo_id}", icon=":material/edit:", use_container_width=True):
+                    db_utils.rename_conversation(convo_id, new_title)
+                    st.rerun()
+
+        if st.session_state.chat_history:
+            st.download_button(
+                "Export as Markdown",
+                data=chat_as_markdown(usecase, st.session_state.chat_history),
+                file_name="netra-chat.md",
+                mime="text/markdown",
+                icon=":material/download:",
+                use_container_width=True,
+                key="export_chat",
+            )
+
+        with st.container(key="dangerzone"):
+            if st.button("Delete this chat", key=f"del_{convo_id}", icon=":material/delete:", use_container_width=True):
+                db_utils.delete_conversation(convo_id)
+                if usecase == "Netra Agent":
+                    from src.langgraphagenticai.memory.checkpointer import delete_thread
+                    delete_thread(convo_id)
+                reset_conversation_state()
+                st.rerun()
+
+    def _api_key_input(self, label: str, secret_name: str, required: bool = True) -> str:
+        """
+        Optional key field. The user's own key wins; otherwise the app's built-in
+        key (Streamlit secrets / env var) is used. The built-in key is never put
+        into the text box, so visitors can't reveal it with the 'show password' eye.
+        """
+        default_key = get_default_secret(secret_name)
+        user_key = st.text_input(
+            label,
+            type="password",
+            key=f"user_{secret_name}",
+            placeholder="Using built-in key (optional)" if default_key else "Paste your key",
+        ).strip()
+        if not user_key and not default_key:
+            if required:
+                st.warning(f"Enter your {label} to continue")
+            else:
+                st.caption(f"Optional: add a {label} to enable web search.")
+        return user_key or default_key

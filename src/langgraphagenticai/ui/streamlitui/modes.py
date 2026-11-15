@@ -1,0 +1,78 @@
+"""Everything the UI shows about each mode, in one place."""
+
+# internal value -> display info
+MODES = {
+    "Netra Agent": {
+        "icon": "auto_awesome",
+        "label": "Netra Agent",
+        "tagline": "Searches the web, reads your PDFs and remembers you, and decides how to answer each message.",
+        "starters": [
+            ("public", "What are the biggest AI announcements this week?"),
+            ("psychology", "Remember that I prefer short, bullet-point answers"),
+            ("table_chart", "Compare RAG and fine-tuning in a table"),
+            ("person", "What do you remember about me?"),
+        ],
+        "pdf": True,
+    },
+    "Basic Chatbot": {
+        "icon": "chat",
+        "label": "Basic Chatbot",
+        "tagline": "A fast, plain conversation with the model. No tools, just chat.",
+        "starters": [
+            ("school", "Explain transformers like I'm new to AI"),
+            ("quiz", "Give me 5 interview questions on LangGraph"),
+            ("edit_note", "Write a haiku about debugging at 2 AM"),
+            ("flight", "Plan a relaxed 3-day trip to Goa"),
+        ],
+    },
+    "Chatbot With Web": {
+        "icon": "public",
+        "label": "Web Search",
+        "tagline": "Live answers from the web with sources, powered by Tavily.",
+        "starters": [
+            ("bolt", "What's new with Groq this month?"),
+            ("newspaper", "Today's top technology headlines"),
+            ("sports_motorsports", "Who won the most recent Formula 1 race?"),
+            ("currency_bitcoin", "What is the price of Bitcoin right now?"),
+        ],
+    },
+    "Chat with PDF": {
+        "icon": "description",
+        "label": "Chat With PDF",
+        "tagline": "Ask questions about a document. Answers cite page numbers and quote the source passages.",
+        "starters": [
+            ("summarize", "Summarize this document in 5 bullet points"),
+            ("format_list_numbered", "List the key findings with page numbers"),
+            ("warning", "What risks or limitations does it mention?"),
+            ("lightbulb", "Explain the conclusion in simple words"),
+        ],
+        "pdf": True,
+    },
+    "AI News": {
+        "icon": "newspaper",
+        "label": "News Summary",
+        "tagline": "A map-reduce digest of the latest AI news from across the web.",
+        "starters": [
+            ("today", "Daily"),
+            ("date_range", "Weekly"),
+            ("calendar_month", "Monthly"),
+        ],
+    },
+    "Deep Research": {
+        "icon": "travel_explore",
+        "label": "Deep Research",
+        "tagline": "A team of agents: a planner, parallel researchers, a writer and a critic. You approve the plan before they start.",
+        "starters": [
+            ("bolt", "The future of small modular nuclear reactors"),
+            ("smart_toy", "State of AI agents in 2026: tools, frameworks, adoption"),
+            ("battery_charging_full", "Solid-state vs LFP batteries for EVs"),
+            ("payments", "How UPI changed payments in India"),
+        ],
+    },
+}
+
+NAV_ORDER = ["Netra Agent", "Basic Chatbot", "Chatbot With Web", "Chat with PDF", "AI News", "Deep Research"]
+
+
+def mode(usecase: str) -> dict:
+    return MODES.get(usecase, {"icon": "chat", "label": usecase, "tagline": "", "starters": []})
