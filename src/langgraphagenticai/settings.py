@@ -12,7 +12,9 @@ from dotenv import load_dotenv
 KNOWN_KEYS = [
     "GROQ_API_KEY",
     "TAVILY_API_KEY",
-    "HUGGINGFACEHUB_API_TOKEN",
+    "HUGGINGFACEHUB_API_TOKEN",   # only for EMBEDDINGS_PROVIDER=huggingface
+    "EMBEDDINGS_PROVIDER",        # fastembed (local, default if installed) | huggingface
+    "MAX_PDF_CHUNKS",
     "DATABASE_URL",            # Postgres (e.g. Supabase). Empty -> local SQLite file
     "DAILY_MESSAGE_LIMIT",     # messages/user/day when using the built-in Groq key
     "LANGSMITH_TRACING",

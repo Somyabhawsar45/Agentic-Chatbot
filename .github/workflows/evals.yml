@@ -1,0 +1,61 @@
+name: RAG evaluation
+
+# Runs the golden-question evaluation against the real model + embeddings and fails the
+# build if quality drops below evals/thresholds.json.
+# Needs one repository secret: GROQ_API_KEY (Settings -> Secrets and variables -> Actions).
+# Without it the job is skipped, not failed. Embeddings run locally (fastembed), so no
+# HuggingFace token or credits are needed.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "src/langgraphagenticai/rag/**"
+      - "src/langgraphagenticai/nodes/pdf_rag_node.py"
+      - "src/langgraphagenticai/nodes/netra_agent_node.py"
+      - "evals/**"
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    env:
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      EMBEDDINGS_PROVIDER: fastembed
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check secrets
+        id: keys
+        run: |
+          if [ -n "$GROQ_API_KEY" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Skipping evaluation: add GROQ_API_KEY as a repository secret."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.keys.outputs.ready == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        if: steps.keys.outputs.ready == 'true'
+        run: pip install -r requirements.txt fastembed
+
+      - name: Run evaluation
+        if: steps.keys.outputs.ready == 'true'
+        run: python -m evals.run --pause 1 --judge
+
+      - name: Show report
+        if: always() && steps.keys.outputs.ready == 'true'
+        run: cat evals/results/latest.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: always() && steps.keys.outputs.ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: evals/results/

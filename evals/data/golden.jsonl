@@ -1,0 +1,31 @@
+{"id": "q01", "type": "answerable", "question": "Who is the CEO of Meridian Payments?", "expected_pages": [1], "expected_facts": ["Anika Rao"]}
+{"id": "q02", "type": "answerable", "question": "How many people did Meridian employ as of 31 March 2025?", "expected_pages": [1], "expected_facts": ["1,240"]}
+{"id": "q03", "type": "answerable", "question": "In which year was Meridian founded, and where is its headquarters?", "expected_pages": [1], "expected_facts": ["2014", "Pune"]}
+{"id": "q04", "type": "answerable", "question": "What was Meridian's revenue in FY2025?", "expected_pages": [2], "expected_facts": ["4,820"]}
+{"id": "q05", "type": "answerable", "question": "What was the revenue in FY2024?", "expected_pages": [2], "expected_facts": ["4,085"]}
+{"id": "q06", "type": "answerable", "question": "How much net profit did the company make in FY2025?", "expected_pages": [2], "expected_facts": ["612"]}
+{"id": "q07", "type": "answerable", "question": "What was the net profit in the previous year, FY2024?", "expected_pages": [2], "expected_facts": ["498"]}
+{"id": "q08", "type": "answerable", "question": "What was the EBITDA margin in FY2025?", "expected_pages": [2], "expected_facts": ["21.4"]}
+{"id": "q09", "type": "answerable", "question": "By what percentage did revenue grow, and what was the FY2024 revenue it grew from?", "expected_pages": [2], "expected_facts": ["18", "4,085"]}
+{"id": "q10", "type": "answerable", "question": "Which business segment contributed the most revenue?", "expected_pages": [3], "expected_facts": ["Merchant acquiring"]}
+{"id": "q11", "type": "answerable", "question": "How much revenue did the cross-border payments segment generate?", "expected_pages": [3], "expected_facts": ["723"]}
+{"id": "q12", "type": "answerable", "question": "Which segment grew the fastest, and by how much?", "expected_pages": [3], "expected_facts": ["Cross-border", "31"]}
+{"id": "q13", "type": "answerable", "question": "How many transactions did the platform process in FY2025?", "expected_pages": [4], "expected_facts": ["9.6 billion"]}
+{"id": "q14", "type": "answerable", "question": "What was the platform uptime?", "expected_pages": [4], "expected_facts": ["99.97"]}
+{"id": "q15", "type": "answerable", "question": "What was the average API response latency?", "expected_pages": [4], "expected_facts": ["142"]}
+{"id": "q16", "type": "answerable", "question": "What was the fraud loss rate as a share of payment value?", "expected_pages": [4], "expected_facts": ["0.011"]}
+{"id": "q17", "type": "answerable", "question": "When did Meridian get its payment aggregator authorisation from the RBI?", "expected_pages": [5], "expected_facts": ["August 2023"]}
+{"id": "q18", "type": "answerable", "question": "Which version of PCI DSS is the company certified for?", "expected_pages": [5], "expected_facts": ["4.0"]}
+{"id": "q19", "type": "answerable", "question": "In which two cities are the data centres located?", "expected_pages": [5], "expected_facts": ["Mumbai", "Hyderabad"]}
+{"id": "q20", "type": "answerable", "question": "How many major P1 incidents happened in FY2025?", "expected_pages": [5], "expected_facts": ["3|three"]}
+{"id": "q21", "type": "answerable", "question": "What revenue growth does management guide for FY2026?", "expected_pages": [6], "expected_facts": ["20", "23"]}
+{"id": "q22", "type": "answerable", "question": "Which new product will launch in the second quarter of FY2026?", "expected_pages": [6], "expected_facts": ["UPI Credit"]}
+{"id": "q23", "type": "answerable", "question": "What dividend per share has the board proposed?", "expected_pages": [6], "expected_facts": ["4.50"]}
+{"id": "q24", "type": "answerable", "question": "Who chairs the audit committee?", "expected_pages": [7], "expected_facts": ["Meera Iyer"]}
+{"id": "q25", "type": "answerable", "question": "What share of electricity came from renewable sources?", "expected_pages": [7], "expected_facts": ["38"]}
+{"id": "q26", "type": "answerable", "question": "What was employee attrition in FY2025?", "expected_pages": [7], "expected_facts": ["14.2"]}
+{"id": "u01", "type": "unanswerable", "question": "What is Meridian's stock price today?"}
+{"id": "u02", "type": "unanswerable", "question": "Who is the CEO of Meridian's biggest competitor?"}
+{"id": "u03", "type": "unanswerable", "question": "What was Meridian's revenue in FY2023?"}
+{"id": "u04", "type": "unanswerable", "question": "How many offices does Meridian have in the USA?"}
+{"id": "u05", "type": "unanswerable", "question": "How many merchants use Meridian's platform?"}

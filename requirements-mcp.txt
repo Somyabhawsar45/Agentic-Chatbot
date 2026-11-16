@@ -1,0 +1,10 @@
+# Netra MCP server (python -m mcp_server). Lighter than the full app: no Streamlit, no LangGraph.
+mcp>=2,<3                 # SDK v2 (FastMCP was renamed MCPServer)
+langchain-community       # FAISS vector store, FastEmbed wrapper
+langchain-core
+langchain-text-splitters
+faiss-cpu
+pypdf
+tavily-python             # web_search tool (optional at runtime: needs TAVILY_API_KEY)
+python-dotenv
+fastembed                 # free local embeddings (the server's default; no API key)

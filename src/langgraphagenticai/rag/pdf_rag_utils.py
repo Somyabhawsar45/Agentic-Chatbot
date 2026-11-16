@@ -5,6 +5,7 @@ Each conversation's FAISS index is serialized and stored in the database
 (db_utils.pdf_indexes), so PDF chats survive app restarts. A small in-memory
 cache avoids re-loading the index on every question.
 """
+import importlib.util
 import os
 import threading
 from collections import OrderedDict
@@ -23,16 +24,63 @@ _cache_lock = threading.Lock()
 _CACHE_SIZE = 8
 
 
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
+# Local embedding settings, chosen by measurement (600 chunks of ~900 characters):
+#   library default (batch 256, 512 tokens): peak 1.8 GB, 11 chunks/s
+#   batch 8, 256 tokens (this setting):       peak 0.33 GB, 20 chunks/s (9.5 on one CPU core)
+# 256 tokens is the model's own training limit, and our 1000-character chunks fit in it.
+EMBED_BATCH_SIZE = 8
+EMBED_MAX_TOKENS = 256
+
+# Indexing runs synchronously on the (small, shared) app server. Refuse absurdly large PDFs
+# instead of tying up the CPU for minutes; override with MAX_PDF_CHUNKS.
+def _max_chunks() -> int:
+    try:
+        return max(1, int(os.getenv("MAX_PDF_CHUNKS", "1500")))
+    except ValueError:
+        return 1500
+
+
+MAX_CHUNKS = _max_chunks()
+
+
+def embedding_provider() -> str:
+    """
+    EMBEDDINGS_PROVIDER wins if set: 'fastembed' (free local ONNX, no API key) or
+    'huggingface' (hosted Inference API: needs a token and available HF credits).
+    Otherwise local embeddings are used when `fastembed` is installed, else the hosted API.
+    """
+    explicit = os.getenv("EMBEDDINGS_PROVIDER", "").strip().lower()
+    if explicit:
+        return explicit
+    return "fastembed" if importlib.util.find_spec("fastembed") else "huggingface"
+
+
+def embedding_label() -> str:
+    return f"{embedding_provider()}:{EMBEDDING_MODEL}"
+
+
 def get_embeddings():
-    """Uses HuggingFace's hosted Inference Endpoint (current, non-deprecated API)
-    instead of a local model, so no heavy torch/transformers download is needed."""
+    """
+    Local (default when fastembed is installed): the MiniLM model run on CPU with ONNX. Free, no key,
+    no hosted-API quota; the ~90 MB model is downloaded on first use and cached.
+    Hosted (EMBEDDINGS_PROVIDER=huggingface, or fastembed missing): HuggingFace Inference API.
+    Note: an index built with one provider should be queried with the same one.
+    """
     global _embeddings_instance
     if _embeddings_instance is None:
-        from langchain_huggingface import HuggingFaceEndpointEmbeddings
-        _embeddings_instance = HuggingFaceEndpointEmbeddings(
-            model="sentence-transformers/all-MiniLM-L6-v2",
-            huggingfacehub_api_token=os.getenv("HUGGINGFACEHUB_API_TOKEN"),
-        )
+        if embedding_provider() == "fastembed":
+            from langchain_community.embeddings import FastEmbedEmbeddings
+            _embeddings_instance = FastEmbedEmbeddings(
+                model_name=EMBEDDING_MODEL, batch_size=EMBED_BATCH_SIZE, max_length=EMBED_MAX_TOKENS,
+            )
+        else:
+            from langchain_huggingface import HuggingFaceEndpointEmbeddings
+            _embeddings_instance = HuggingFaceEndpointEmbeddings(
+                model=EMBEDDING_MODEL,
+                huggingfacehub_api_token=os.getenv("HUGGINGFACEHUB_API_TOKEN"),
+            )
     return _embeddings_instance
 
 
@@ -89,6 +137,11 @@ def build_index(file_path: str, conversation_id: int, filename: str = None) -> i
     texts, metadatas = chunk_pages(extract_pages(file_path), source=filename)
     if not texts:
         raise ValueError("No extractable text found in this PDF (it may be scanned/image-only).")
+    if len(texts) > MAX_CHUNKS:
+        raise ValueError(
+            f"This PDF is too large to index here ({len(texts)} passages, the limit is {MAX_CHUNKS}). "
+            "Try a shorter document or split it."
+        )
 
     vectorstore = FAISS.from_texts(texts, get_embeddings(), metadatas=metadatas)
     db_utils.save_pdf_index(conversation_id, filename, vectorstore.serialize_to_bytes())

@@ -1,0 +1,9 @@
+{
+  "_note": "Minimums just below the measured baseline (gpt-oss-20b, local MiniLM embeddings). Raise them as the system improves.",
+  "retrieval_hit_rate": 0.95,
+  "retrieval_top1": 0.80,
+  "answer_accuracy": 0.90,
+  "citation_rate": 0.90,
+  "abstention_rate": 0.80,
+  "faithfulness": 0.90
+}
