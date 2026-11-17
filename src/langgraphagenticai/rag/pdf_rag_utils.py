@@ -15,7 +15,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from src.langgraphagenticai.database import db_utils
 
-# Legacy on-disk indexes (older versions / the FastAPI course endpoints)
+# Legacy on-disk indexes (older versions). Course indexes now live in the database;
+# old on-disk ones are copied into it the first time they're loaded.
 INDEX_ROOT = os.path.join(os.getcwd(), "pdf_indexes")
 
 _embeddings_instance = None
@@ -161,6 +162,8 @@ def has_index(conversation_id) -> bool:
         return True
     if _is_db_id(conversation_id) and db_utils.has_pdf_index(int(conversation_id)):
         return True
+    if not _is_db_id(conversation_id) and db_utils.has_course_index(str(conversation_id)):
+        return True
     return os.path.exists(os.path.join(INDEX_ROOT, f"convo_{conversation_id}"))
 
 
@@ -176,15 +179,25 @@ def load_index(conversation_id):
     vectorstore = None
     if _is_db_id(conversation_id):
         data = db_utils.get_pdf_index(int(conversation_id))
-        if data:
-            # bytes were produced by our own build_index (trusted source)
-            vectorstore = FAISS.deserialize_from_bytes(
-                data, get_embeddings(), allow_dangerous_deserialization=True
-            )
+    else:
+        # Scholr course ids (MongoDB ObjectIds) are not numeric
+        data = db_utils.get_course_index(key)
+    if data:
+        # bytes were produced by our own build functions (trusted source)
+        vectorstore = FAISS.deserialize_from_bytes(
+            data, get_embeddings(), allow_dangerous_deserialization=True
+        )
+
     if vectorstore is None:
         index_path = os.path.join(INDEX_ROOT, f"convo_{conversation_id}")
         if os.path.exists(index_path):
             vectorstore = FAISS.load_local(index_path, get_embeddings(), allow_dangerous_deserialization=True)
+            if not _is_db_id(conversation_id):
+                # Old course index on disk: copy it into the database before the next
+                # restart wipes it
+                db_utils.save_course_index(
+                    key, vectorstore.serialize_to_bytes(), vectorstore.index.ntotal
+                )
 
     if vectorstore is not None:
         _cache_put(key, vectorstore)
@@ -219,18 +232,35 @@ def format_passages(passages: list) -> str:
 
 def build_index_from_text(text: str, course_id: str) -> str:
     """
-    Chunk -> embed -> save FAISS index for a course (text-based, not PDF).
-    Used by the FastAPI /index-course endpoint; stored on disk.
+    Chunk -> embed -> save the FAISS index for a Scholr course (text, not PDF).
+    Used by the FastAPI /index-course endpoint.
+
+    Scholr sends the WHOLE course (description + every lecture's summary and
+    transcript) each time anything changes, so this always REPLACES the course's
+    previous index — content is never duplicated.
+
+    The index is stored in the database (survives restarts on hosts that wipe the
+    disk). Returns a short description of where it was stored.
     """
     from langchain_community.vectorstores import FAISS
 
     if not text.strip():
         raise ValueError("No content provided to index for this course.")
 
-    os.makedirs(INDEX_ROOT, exist_ok=True)
-    vectorstore = FAISS.from_texts(chunk_text(text), get_embeddings())
-    index_path = os.path.join(INDEX_ROOT, f"convo_{course_id}")
-    vectorstore.save_local(index_path)
-    with _cache_lock:
-        _cache.pop(str(course_id), None)
-    return index_path
+    key = str(course_id)
+    chunks = chunk_text(text)
+    if len(chunks) > MAX_CHUNKS:
+        raise ValueError(
+            f"This course is too large to index here ({len(chunks)} passages, the limit is {MAX_CHUNKS})."
+        )
+    vectorstore = FAISS.from_texts(chunks, get_embeddings())
+    db_utils.save_course_index(key, vectorstore.serialize_to_bytes(), len(chunks))
+    _cache_put(key, vectorstore)
+
+    # Remove any old on-disk copy so it can never shadow the new index
+    legacy_path = os.path.join(INDEX_ROOT, f"convo_{key}")
+    if os.path.isdir(legacy_path):
+        import shutil
+        shutil.rmtree(legacy_path, ignore_errors=True)
+
+    return f"course_indexes/{key} ({len(chunks)} chunks)"

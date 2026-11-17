@@ -153,6 +153,12 @@ _SQLITE_SCHEMA = [
         created_at TEXT NOT NULL,
         PRIMARY KEY (conversation_id, message_index)
     )""",
+    """CREATE TABLE IF NOT EXISTS course_indexes (
+        course_id TEXT PRIMARY KEY,
+        data BLOB NOT NULL,
+        chunk_count INTEGER NOT NULL,
+        updated_at TEXT NOT NULL
+    )""",
 ]
 
 _POSTGRES_SCHEMA = [
@@ -196,6 +202,12 @@ _POSTGRES_SCHEMA = [
         score INTEGER NOT NULL,
         created_at TEXT NOT NULL,
         PRIMARY KEY (conversation_id, message_index)
+    )""",
+    """CREATE TABLE IF NOT EXISTS course_indexes (
+        course_id TEXT PRIMARY KEY,
+        data BYTEA NOT NULL,
+        chunk_count INTEGER NOT NULL,
+        updated_at TEXT NOT NULL
     )""",
     "CREATE INDEX IF NOT EXISTS idx_memories_user ON user_memories(user_id)",
     "CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id)",
@@ -331,6 +343,41 @@ def get_pdf_filename(conversation_id):
         return None
     row = _run("SELECT filename FROM pdf_indexes WHERE conversation_id = ?", (conversation_id,), fetch="one")
     return row["filename"] if row else None
+
+
+# ------------------------ COURSE INDEXES ------------------------
+# FAISS index for each Scholr course (built by the FastAPI /index-course endpoint).
+# Stored in the database, not on disk: free hosts wipe the disk on every restart or
+# sleep, which used to silently erase every course's index. One row per course;
+# re-indexing replaces the row, so content is never duplicated.
+# init_db() is called here because the FastAPI process doesn't call it at startup.
+
+def save_course_index(course_id: str, data: bytes, chunk_count: int):
+    init_db()
+    _run(
+        """INSERT INTO course_indexes (course_id, data, chunk_count, updated_at) VALUES (?, ?, ?, ?)
+           ON CONFLICT (course_id) DO UPDATE SET data = excluded.data,
+           chunk_count = excluded.chunk_count, updated_at = excluded.updated_at""",
+        (str(course_id), data, chunk_count, _now()),
+    )
+
+
+def get_course_index(course_id: str):
+    init_db()
+    row = _run("SELECT data FROM course_indexes WHERE course_id = ?", (str(course_id),), fetch="one")
+    return bytes(row["data"]) if row else None
+
+
+def has_course_index(course_id: str) -> bool:
+    init_db()
+    return _run(
+        "SELECT 1 AS found FROM course_indexes WHERE course_id = ?", (str(course_id),), fetch="one"
+    ) is not None
+
+
+def delete_course_index(course_id: str):
+    init_db()
+    _run("DELETE FROM course_indexes WHERE course_id = ?", (str(course_id),))
 
 
 def rename_conversation(conversation_id: int, title: str):
