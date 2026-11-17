@@ -22,6 +22,24 @@ AI_HEAD = html_block("""<div class="ai-head"><div class="ai-avatar">
 # Small helpers
 # =====================================================================
 
+def friendly_error(e: Exception) -> str:
+    """Readable message for the errors users actually hit; anything else keeps its own text."""
+    text = str(e)
+    lowered = text.lower()
+    if "429" in text or "rate limit" in lowered or "rate_limit" in lowered:
+        wait = re.search(r"try again in ([\d.]+)\s*(ms|s)\b", text)
+        seconds = None
+        if wait:
+            seconds = float(wait.group(1)) / (1000 if wait.group(2) == "ms" else 1)
+        n = max(1, round(seconds)) if seconds is not None else None
+        hint = "a minute" if n is None else f"about {n} second{'s' if n != 1 else ''}"
+        return (f"The AI provider's rate limit was reached (the demo key is shared and the free tier is small). "
+                f"Please wait {hint} and try again, or add your own free Groq key in ⚙ Settings.")
+    if "401" in text or "invalid api key" in lowered or "invalid_api_key" in lowered:
+        return "The Groq API key was rejected. Check the key in ⚙ Settings."
+    return f"Something went wrong: {e}"
+
+
 def clean_snippet(text: str, max_len: int = 200) -> str:
     if not text:
         return ""
@@ -295,7 +313,7 @@ def stream_graph_answer(
         if trace is not None:
             trace.update(label="Run failed", state="error")
         slot.empty()
-        st.error(f"Something went wrong: {e}")
+        st.error(friendly_error(e))
         return ""
 
     elapsed = time.perf_counter() - started

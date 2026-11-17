@@ -44,7 +44,7 @@ def test_agent_uses_pdf_tool_then_is_forced_to_answer(fake_llm_factory, monkeypa
     ids = itertools.count(1)
 
     def responder(messages, bound):
-        if bound.get("tool_choice") == "none":
+        if not bound.get("tools"):       # the forced final answer: asked with NO tools declared
             return AIMessage(content="Revenue grew 20% (p. 3).")
         # a "stubborn" model that always wants to search again
         return AIMessage(content="", tool_calls=[
@@ -63,3 +63,9 @@ def test_agent_uses_pdf_tool_then_is_forced_to_answer(fake_llm_factory, monkeypa
     assert "page 3" in tool_messages[0].content
     assert tool_messages[0].artifact == [passage]          # used for the citation box
     assert "search_pdf" in llm.calls[0][1]["tools"]       # tool offered because a PDF is attached
+
+    # the final answer was requested with no tools and a plain-text history (no tool-call objects left)
+    final_messages, final_bound = llm.calls[-1]
+    assert not final_bound.get("tools") and "tool_choice" not in final_bound
+    assert not any(isinstance(m, ToolMessage) or getattr(m, "tool_calls", None) for m in final_messages)
+    assert any("[Result from search_pdf]" in str(m.content) and "page 3" in str(m.content) for m in final_messages)

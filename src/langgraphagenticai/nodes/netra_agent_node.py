@@ -6,7 +6,7 @@ from langchain_core.runnables import RunnableConfig
 from src.langgraphagenticai.database import db_utils
 from src.langgraphagenticai.rag import pdf_rag_utils
 from src.langgraphagenticai.state.state import State
-from src.langgraphagenticai.nodes.tool_limits import ANSWER_NOW, tools_exhausted
+from src.langgraphagenticai.nodes.tool_limits import answer_without_tools, tools_exhausted
 
 SYSTEM_PROMPT = """You are Netra, an agentic AI assistant. Today's date is {today}.
 
@@ -91,10 +91,9 @@ class NetraAgentNode:
         )
 
         if tools and tools_exhausted(state["messages"]):
-            # enough tool use for this question: tools stay declared (the history
-            # contains tool calls) but tool_choice="none" forces a text answer
-            llm = self.llm.bind_tools(tools, tool_choice="none")
-            response = llm.invoke([system] + history + [ANSWER_NOW])
+            # enough tool use for this question: answer from a plain-text copy of the
+            # conversation with no tools declared (nothing left to call, nothing to reject)
+            response = answer_without_tools(self.llm, [system] + history)
         else:
             llm = self.llm.bind_tools(tools) if tools else self.llm
             response = llm.invoke([system] + history)

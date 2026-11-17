@@ -5,8 +5,24 @@ from langchain_core.messages import AIMessage, ToolMessage
 from src.langgraphagenticai.ui.streamlitui.display_result import (
     dedupe_citations,
     describe_step,
+    friendly_error,
     parse_tavily_results,
 )
+
+
+def test_friendly_error_for_groq_rate_limit():
+    raw = ("Error code: 429 - {'error': {'message': 'Rate limit reached for model openai/gpt-oss-20b ... "
+           "on tokens per minute (TPM): Limit 8000, Used 7888, Requested 2557. Please try again in 18.3375s.', "
+           "'code': 'rate_limit_exceeded'}}")
+    message = friendly_error(RuntimeError(raw))
+    assert "rate limit" in message and "about 18 seconds" in message and "org_" not in message and "{" not in message
+    assert "about 1 seconds" not in friendly_error(RuntimeError("429 rate limit. Please try again in 6.4ms"))
+    assert "a minute" in friendly_error(RuntimeError("429 Too Many Requests"))
+
+
+def test_friendly_error_for_bad_key_and_unknown_errors():
+    assert "key was rejected" in friendly_error(RuntimeError("Error code: 401 - Invalid API Key"))
+    assert friendly_error(ValueError("boom")) == "Something went wrong: boom"
 
 
 def test_parse_tavily_results():
