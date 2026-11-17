@@ -47,6 +47,13 @@ def load_langgraph_agenticai_app():
         st.error("Failed to load UI inputs.")
         return
 
+    _run_chat(user_input)
+    # a chat created during this run (first message) appears in the sidebar right away
+    ui.render_history(final=True)
+
+
+def _run_chat(user_input: dict):
+    """Read the user's message, build the graph for the selected mode and render the conversation."""
     # ---------------- USER MESSAGE ----------------
     user_message = None
 
@@ -84,12 +91,17 @@ def load_langgraph_agenticai_app():
             st.error("No use case selected.")
             return
 
-        # Don't build/cache a graph without the keys it needs
+        # Don't build/cache a graph without the keys it needs, but still show the saved
+        # conversation: reading an old report shouldn't require an API key.
+        missing = None
         if not user_input.get("GROQ_API_KEY"):
-            st.info("Add a Groq API key in **⚙ Settings** (sidebar) to start chatting.")
-            return
-        if usecase in WEB_USECASES and not user_input.get("TAVILY_API_KEY"):
-            st.info("Add a Tavily API key in **⚙ Settings** (sidebar) to use this feature.")
+            missing = "Add a Groq API key in **⚙ Settings** to start chatting."
+        elif usecase in WEB_USECASES and not user_input.get("TAVILY_API_KEY"):
+            missing = "Add a Tavily API key in **⚙ Settings** to use this feature."
+        if missing:
+            st.info(missing)
+            if st.session_state.get("chat_history"):
+                DisplayResultStreamlit(usecase=usecase, graph=None, user_message=None).display_result_on_ui()
             return
 
         if user_message and over_daily_limit(user_input):

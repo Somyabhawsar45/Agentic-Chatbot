@@ -74,7 +74,13 @@ def reset_conversation_state():
     st.session_state.chat_history = []
     st.session_state.current_conversation_id = None
     st.session_state.pdf_indexed_for = None
-    st.session_state.research_pending = None
+
+
+def _open_conversation(convo_id: int):
+    """History row clicked (runs before the rerun, so the right chat renders straight away)."""
+    reset_conversation_state()
+    st.session_state.current_conversation_id = convo_id
+    st.session_state.chat_history = db_utils.get_messages(convo_id)
 
 
 class LoadStreamlitUI:
@@ -90,7 +96,7 @@ class LoadStreamlitUI:
             page_title="Netra | Agentic AI",
             page_icon=Image.open(LOGO_PATH) if LOGO_PATH.exists() else "🤖",
             layout="wide",
-            initial_sidebar_state="expanded",
+            initial_sidebar_state="auto",   # expanded on desktop, collapsed on phones
         )
         db_utils.init_db()
 
@@ -104,7 +110,6 @@ class LoadStreamlitUI:
             "pdf_indexed_for": None,
             "selected_usecase_value": NAV_ORDER[0],
             "pending_prompt": None,
-            "research_pending": None,
             "run_ids": {},
         }
         for key, value in defaults.items():
@@ -122,10 +127,12 @@ class LoadStreamlitUI:
             self._render_logo()
             self._render_new_chat()
             self._render_usecase_nav()
-            self._render_history()
+            self._history_slot = st.empty()  # filled below, refreshed by render_history(final=True)
             st.markdown("<hr/>", unsafe_allow_html=True)
             self._render_account_menu()      # user chip -> memory + sign out
             self._render_version_footer()
+        self._history_signature = None
+        self.render_history()
 
         # ---------------- TOP BAR (main area) ----------------
         self._render_topbar()
@@ -147,7 +154,7 @@ class LoadStreamlitUI:
 
     def _render_new_chat(self):
         with st.container(key="newchat_wrap"):
-            if st.button("New chat", icon=":material/add:", key="new_chat_btn", use_container_width=True):
+            if st.button("New chat", icon=":material/add:", key="new_chat_btn", width="stretch"):
                 reset_conversation_state()
                 st.rerun()
 
@@ -158,23 +165,22 @@ class LoadStreamlitUI:
         for internal_value, icon, label in NAV_ITEMS:
             slug = slugify(internal_value)
             with st.container(key=f"navitem_{slug}"):
-                if st.button(label, icon=f":material/{icon}:", key=f"nav_{slug}", use_container_width=True):
+                if st.button(label, icon=f":material/{icon}:", key=f"nav_{slug}", width="stretch"):
                     st.session_state.selected_usecase_value = internal_value
                     st.rerun()
 
-        # active highlight (emitted after the generic rules so it wins)
-        active_slug = slugify(st.session_state.selected_usecase_value)
+        # active highlight: a filled blue pill. The sidebar's <style> comes BEFORE the main stylesheet in
+        # the page, so it can't win on order; the extra `section[...]` makes it more specific instead.
+        active = "navitem_" + slugify(st.session_state.selected_usecase_value)
         st.markdown(html_block(
             f"""<style>
-            div[class*="st-key-navitem_{active_slug}"] button{{
-                background: var(--accent-soft) !important;
-                box-shadow: inset 2px 0 0 var(--accent);
+            section[data-testid="stSidebar"] div[class*="st-key-{active}"] button{{
+                background: linear-gradient(90deg, rgba(79,142,247,.20), rgba(79,142,247,.06)) !important;
+                border-color: rgba(79,142,247,.32) !important;
             }}
-            div[class*="st-key-navitem_{active_slug}"] button p,
-            div[class*="st-key-navitem_{active_slug}"] button span,
-            div[class*="st-key-navitem_{active_slug}"] button [data-testid="stIconMaterial"]{{
-                color: #dfe9ff !important;
-            }}
+            section[data-testid="stSidebar"] div[class*="st-key-{active}"] button p,
+            section[data-testid="stSidebar"] div[class*="st-key-{active}"] button span{{ color: #ffffff !important; font-weight: 600 !important; }}
+            section[data-testid="stSidebar"] div[class*="st-key-{active}"] button [data-testid="stIconMaterial"]{{ color: var(--accent-2) !important; }}
             </style>"""),
             unsafe_allow_html=True,
         )
@@ -189,10 +195,23 @@ class LoadStreamlitUI:
             reset_conversation_state()
 
     # ------------------------------------------------------------------
-    def _render_history(self):
+    # ------------------------------------------------------------------
+    def render_history(self, final: bool = False):
+        """
+        Draw the history list into its sidebar slot. Called at the start of the run, and again
+        at the end (final=True) so a chat created during this run shows up immediately. The
+        second pass only redraws if the list actually changed, and uses its own widget keys.
+        """
         user_id = st.session_state.authenticated_user["id"]
         conversations = db_utils.get_conversations(user_id, self.user_controls["selected_usecase"])
+        signature = (tuple((c["id"], c["title"]) for c in conversations), st.session_state.current_conversation_id)
+        if final and signature == self._history_signature:
+            return
+        self._history_signature = signature
+        with self._history_slot.container():
+            self._render_history(conversations, stage="b" if final else "a")
 
+    def _render_history(self, conversations: list, stage: str):
         st.markdown('<div class="sidebar-label">History</div>', unsafe_allow_html=True)
         if not conversations:
             st.markdown('<div class="hist-empty">Your chats in this mode will appear here.</div>',
@@ -200,35 +219,30 @@ class LoadStreamlitUI:
             return
 
         if len(conversations) > 8:
-            with st.container(key="histsearch"):
-                query = st.text_input(
-                    "Search chats", key="hist_query", placeholder="Search chats…", label_visibility="collapsed"
-                ).strip().lower()
+            if stage == "a":
+                with st.container(key="histsearch"):
+                    st.text_input("Search chats", key="hist_query", placeholder="Search chats…",
+                                  label_visibility="collapsed")
+            query = (st.session_state.get("hist_query") or "").strip().lower()
             if query:
                 conversations = [c for c in conversations if query in (c["title"] or "").lower()]
                 if not conversations:
                     st.markdown('<div class="hist-empty">No matching chats.</div>', unsafe_allow_html=True)
                     return
 
-        with st.container(key="histlist"):
+        with st.container(key=f"histlist_{stage}"):
             for group, items in group_by_date(conversations[:40]):
                 st.markdown(f"<div class='hist-group'>{group}</div>", unsafe_allow_html=True)
                 for convo in items:
-                    self._render_history_item(convo)
+                    self._render_history_item(convo, stage)
 
-    def _render_history_item(self, convo: dict):
-        """One clean row per chat (rename/delete live in ⚙ Settings → This chat)."""
+    def _render_history_item(self, convo: dict, stage: str):
+        """One clean row per chat (rename/delete live in Settings > This chat)."""
         convo_id = convo["id"]
-        is_active = st.session_state.current_conversation_id == convo_id
-        state = "on" if is_active else "off"
-
-        with st.container(key=f"histitem_{state}_{convo_id}"):
-            if st.button(truncate(convo["title"], 34), key=f"convo_{convo_id}", use_container_width=True,
-                         help=convo["title"]):
-                reset_conversation_state()
-                st.session_state.current_conversation_id = convo_id
-                st.session_state.chat_history = db_utils.get_messages(convo_id)
-                st.rerun()
+        state = "on" if st.session_state.current_conversation_id == convo_id else "off"
+        with st.container(key=f"histitem_{state}_{stage}_{convo_id}"):
+            st.button(truncate(convo["title"], 34), key=f"convo_{stage}_{convo_id}", width="stretch",
+                      help=convo["title"], on_click=_open_conversation, args=(convo_id,))
 
     # ------------------------------------------------------------------
     def _render_account_menu(self):
@@ -240,7 +254,7 @@ class LoadStreamlitUI:
         memories = db_utils.get_memories(user_id)
 
         with st.container(key="account"):
-            with st.popover(f"{initials}   {truncate(display_name, 20)}", use_container_width=True):
+            with st.popover(f"{initials}   {truncate(display_name, 20)}", width="stretch"):
                 st.markdown(html_block(
                     f"""<div class="user-chip"><div class="user-avatar">{html.escape(initials)}</div>
                     <div><div class="user-name">{html.escape(display_name)}</div>
@@ -262,12 +276,12 @@ class LoadStreamlitUI:
                                 db_utils.delete_memory(user_id, m["id"])
                                 st.rerun()
                 if memories and st.button("Forget everything", key="mem_clear", icon=":material/delete_sweep:",
-                                          use_container_width=True):
+                                          width="stretch"):
                     db_utils.clear_memories(user_id)
                     st.rerun()
 
                 st.divider()
-                if st.button("Sign out", icon=":material/logout:", key="signout_btn", use_container_width=True):
+                if st.button("Sign out", icon=":material/logout:", key="signout_btn", width="stretch"):
                     st.session_state.authenticated_user = None
                     reset_conversation_state()
                     st.rerun()
@@ -305,7 +319,7 @@ class LoadStreamlitUI:
                     unsafe_allow_html=True,
                 )
             with right:
-                with st.popover("⚙  Settings", use_container_width=True):
+                with st.popover("⚙  Settings", width="stretch"):
                     self._render_settings_body(usecase, model_options)
 
     def _render_settings_body(self, usecase: str, model_options: list):
@@ -345,7 +359,7 @@ class LoadStreamlitUI:
         if current:
             new_title = st.text_input("Name", value=current["title"], key=f"rename_{convo_id}")
             if new_title.strip() and new_title.strip() != current["title"]:
-                if st.button("Save name", key=f"rensave_{convo_id}", icon=":material/edit:", use_container_width=True):
+                if st.button("Save name", key=f"rensave_{convo_id}", icon=":material/edit:", width="stretch"):
                     db_utils.rename_conversation(convo_id, new_title)
                     st.rerun()
 
@@ -356,12 +370,12 @@ class LoadStreamlitUI:
                 file_name="netra-chat.md",
                 mime="text/markdown",
                 icon=":material/download:",
-                use_container_width=True,
+                width="stretch",
                 key="export_chat",
             )
 
         with st.container(key="dangerzone"):
-            if st.button("Delete this chat", key=f"del_{convo_id}", icon=":material/delete:", use_container_width=True):
+            if st.button("Delete this chat", key=f"del_{convo_id}", icon=":material/delete:", width="stretch"):
                 db_utils.delete_conversation(convo_id)
                 if usecase == "Netra Agent":
                     from src.langgraphagenticai.memory.checkpointer import delete_thread

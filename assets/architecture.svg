@@ -108,8 +108,8 @@
   <text x="765" y="716" text-anchor="middle" font-size="14.5" font-weight="600" fill="#333">Tavily</text>
   <text x="765" y="737" text-anchor="middle" font-size="12" fill="#555">web search</text>
   <rect x="850" y="690" width="160" height="62" rx="12" fill="#f6f6f6" stroke="#777"/>
-  <text x="930" y="716" text-anchor="middle" font-size="14.5" font-weight="600" fill="#333">HuggingFace</text>
-  <text x="930" y="737" text-anchor="middle" font-size="12" fill="#555">MiniLM embeddings</text>
+  <text x="930" y="716" text-anchor="middle" font-size="14.5" font-weight="600" fill="#333">FastEmbed</text>
+  <text x="930" y="737" text-anchor="middle" font-size="12" fill="#555">local MiniLM embeddings</text>
   <rect x="1020" y="690" width="150" height="62" rx="12" fill="#f6f6f6" stroke="#777"/>
   <text x="1095" y="716" text-anchor="middle" font-size="14.5" font-weight="600" fill="#333">LangSmith</text>
   <text x="1095" y="737" text-anchor="middle" font-size="12" fill="#555">tracing + feedback</text>

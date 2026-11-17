@@ -5,6 +5,7 @@ MODES = {
     "Netra Agent": {
         "icon": "auto_awesome",
         "label": "Netra Agent",
+        "caps": [("public", "Web search"), ("description", "Reads your PDFs"), ("psychology", "Remembers you"), ("route", "Picks its own tools")],
         "tagline": "Searches the web, reads your PDFs and remembers you, and decides how to answer each message.",
         "starters": [
             ("public", "What are the biggest AI announcements this week?"),
@@ -17,6 +18,7 @@ MODES = {
     "Basic Chatbot": {
         "icon": "chat",
         "label": "Basic Chatbot",
+        "caps": [("bolt", "Fast replies"), ("forum", "Multi-turn memory"), ("stream", "Streams as it types")],
         "tagline": "A fast, plain conversation with the model. No tools, just chat.",
         "starters": [
             ("school", "Explain transformers like I'm new to AI"),
@@ -28,6 +30,7 @@ MODES = {
     "Chatbot With Web": {
         "icon": "public",
         "label": "Web Search",
+        "caps": [("public", "Live web results"), ("link", "Cited sources"), ("loop", "Up to 2 searches per question")],
         "tagline": "Live answers from the web with sources, powered by Tavily.",
         "starters": [
             ("bolt", "What's new with Groq this month?"),
@@ -39,6 +42,7 @@ MODES = {
     "Chat with PDF": {
         "icon": "description",
         "label": "Chat With PDF",
+        "caps": [("description", "Page-cited answers"), ("format_quote", "Exact quoted passages"), ("lock", "Your file stays in your chat")],
         "tagline": "Ask questions about a document. Answers cite page numbers and quote the source passages.",
         "starters": [
             ("summarize", "Summarize this document in 5 bullet points"),
@@ -51,6 +55,7 @@ MODES = {
     "AI News": {
         "icon": "newspaper",
         "label": "News Summary",
+        "caps": [("newspaper", "Many sources"), ("account_tree", "Map-reduce summary"), ("download", "Downloadable report")],
         "tagline": "A map-reduce digest of the latest AI news from across the web.",
         "starters": [
             ("today", "Daily"),
@@ -61,6 +66,7 @@ MODES = {
     "Deep Research": {
         "icon": "travel_explore",
         "label": "Deep Research",
+        "caps": [("fact_check", "You approve the plan"), ("groups", "Parallel researchers"), ("rate_review", "Critic reviews the draft")],
         "tagline": "A team of agents: a planner, parallel researchers, a writer and a critic. You approve the plan before they start.",
         "starters": [
             ("bolt", "The future of small modular nuclear reactors"),
@@ -75,4 +81,4 @@ NAV_ORDER = ["Netra Agent", "Basic Chatbot", "Chatbot With Web", "Chat with PDF"
 
 
 def mode(usecase: str) -> dict:
-    return MODES.get(usecase, {"icon": "chat", "label": usecase, "tagline": "", "starters": []})
+    return MODES.get(usecase, {"icon": "chat", "label": usecase, "tagline": "", "starters": [], "caps": []})

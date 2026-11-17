@@ -7,11 +7,17 @@ import uuid
 import streamlit as st
 from langchain_core.messages import HumanMessage, AIMessage, AIMessageChunk, ToolMessage, SystemMessage
 
+from src.langgraphagenticai import jobs
 from src.langgraphagenticai.database import db_utils
 from src.langgraphagenticai.ui.streamlitui.modes import mode
 from src.langgraphagenticai.ui.streamlitui.theme import html_block
+from src.langgraphagenticai.ui.streamlitui.components import (  # noqa: F401  (re-exported)
+    ResearchProgress, citation_chips_html, clean_markdown, clean_snippet, dedupe_citations, describe_step,
+    friendly_error, get_domain, report_header_html, safe_url, source_pills_html, timeline_html, unique_sources,
+)
 
 REPORT_MODES = ("Deep Research", "AI News")   # answers that get a "Download report" button
+BACKGROUND_MODES = REPORT_MODES               # long runs that keep going when you switch modes
 
 AI_HEAD = html_block("""<div class="ai-head"><div class="ai-avatar">
 <span class="material-symbols-outlined">auto_awesome</span></div>
@@ -22,70 +28,12 @@ AI_HEAD = html_block("""<div class="ai-head"><div class="ai-avatar">
 # Small helpers
 # =====================================================================
 
-def friendly_error(e: Exception) -> str:
-    """Readable message for the errors users actually hit; anything else keeps its own text."""
-    text = str(e)
-    lowered = text.lower()
-    if "429" in text or "rate limit" in lowered or "rate_limit" in lowered:
-        wait = re.search(r"try again in ([\d.]+)\s*(ms|s)\b", text)
-        seconds = None
-        if wait:
-            seconds = float(wait.group(1)) / (1000 if wait.group(2) == "ms" else 1)
-        n = max(1, round(seconds)) if seconds is not None else None
-        hint = "a minute" if n is None else f"about {n} second{'s' if n != 1 else ''}"
-        return (f"The AI provider's rate limit was reached (the demo key is shared and the free tier is small). "
-                f"Please wait {hint} and try again, or add your own free Groq key in ⚙ Settings.")
-    if "401" in text or "invalid api key" in lowered or "invalid_api_key" in lowered:
-        return "The Groq API key was rejected. Check the key in ⚙ Settings."
-    return f"Something went wrong: {e}"
-
-
-def clean_snippet(text: str, max_len: int = 200) -> str:
-    if not text:
-        return ""
-    junk_patterns = [
-        r"^edit this at", r"^#\s+", r"^←|^→|^↑|^↓", r"back to homepage",
-        r"^jump to", r"^contents", r"^\s*\d+\s*$", r"retrieved from",
-        r"wikipedia", r"wikidata", r"this page was last",
-        r"categories\s*:", r"external links", r"see also", r"references",
-    ]
-    clean_lines = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if any(re.match(p, stripped.lower()) for p in junk_patterns):
-            continue
-        clean_lines.append(stripped)
-    clean_text = " ".join(clean_lines)
-    if len(clean_text) > max_len:
-        truncated = clean_text[:max_len]
-        last_period = truncated.rfind(".")
-        if last_period > max_len * 0.6:
-            clean_text = truncated[: last_period + 1]
-        else:
-            clean_text = truncated.rstrip() + "…"
-    return clean_text
-
-
-def get_domain(url: str) -> str:
-    try:
-        match = re.search(r"https?://(?:www\.)?([^/]+)", url)
-        return match.group(1) if match else url
-    except Exception:
-        return url
-
-
-def _short(value, n: int = 80) -> str:
-    text = str(value).replace("\n", " ")
-    return text if len(text) <= n else text[: n - 1] + "…"
+THINKING_HTML = html_block("""<div class="thinking"><div class="thinking-label">Thinking…</div>
+<div class="sk-line w1"></div><div class="sk-line w2"></div><div class="sk-line w3"></div></div>""")
 
 
 def render_thinking(placeholder):
-    placeholder.markdown(html_block(
-        """<div class="thinking-dots"><span></span><span></span><span></span></div>"""),
-        unsafe_allow_html=True,
-    )
+    placeholder.markdown(THINKING_HTML, unsafe_allow_html=True)
 
 
 def render_user_message(content: str):
@@ -98,20 +46,19 @@ def render_user_message(content: str):
 # =====================================================================
 
 def render_search_results(results: list):
-    for i, r in enumerate(results[:6], 1):
+    """Detailed source cards (title, domain, snippet). Only http(s) links are rendered."""
+    for i, r in enumerate(unique_sources(results)[:8], 1):
         title = html.escape(r.get("title") or "Untitled")
-        url = r.get("url") or "#"
-        safe_url = html.escape(url, quote=True)
+        link = html.escape(r["url"], quote=True)
         snippet = html.escape(clean_snippet(r.get("content", ""), max_len=200))
-        domain = html.escape(get_domain(url))
+        domain = html.escape(get_domain(r["url"]))
         st.markdown(html_block(
             f"""<div style="background:var(--bg-raised);border:1px solid var(--border);border-left:3px solid var(--accent);
             border-radius:12px;padding:12px 16px;margin-bottom:10px;">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-            <span style="background:var(--accent-soft);color:var(--accent-2);font-size:11px;font-weight:700;
-            padding:2px 8px;border-radius:20px;">{i}</span>
+            <span class="src-num">{i}</span>
             <span style="color:var(--text-4);font-size:11.5px;">{domain}</span></div>
-            <a href="{safe_url}" target="_blank" style="color:var(--text);font-weight:600;font-size:13.5px;
+            <a href="{link}" target="_blank" rel="noopener noreferrer" style="color:var(--text);font-weight:600;font-size:13.5px;
             text-decoration:none;line-height:1.4;display:block;margin-bottom:4px;">{title}</a>
             <div style="color:var(--text-3);font-size:12.5px;line-height:1.6;">{snippet}</div></div>"""),
             unsafe_allow_html=True,
@@ -132,98 +79,25 @@ def parse_tavily_results(msg: ToolMessage) -> list:
 
 
 def render_sources(results: list):
-    """One collapsible 'Sources' box under the answer (deduplicated by URL)."""
-    seen, unique = set(), []
-    for r in results:
-        url = r.get("url")
-        if url and url not in seen:
-            seen.add(url)
-            unique.append(r)
-    if unique:
-        with st.expander(f"🌐  Sources · {len(unique)}", expanded=False):
-            render_search_results(unique)
-
-
-def dedupe_citations(citations: list) -> list:
-    seen, unique = set(), []
-    for c in citations:
-        key = (c.get("page"), (c.get("text") or "")[:80])
-        if key not in seen:
-            seen.add(key)
-            unique.append(c)
-    return unique
+    """Numbered domain pills under the answer, plus a details box with the source cards."""
+    unique = unique_sources(results)
+    if not unique:
+        return
+    st.markdown(source_pills_html(unique), unsafe_allow_html=True)
+    with st.expander(f"Source details · {len(unique)}", icon=":material/public:", expanded=False):
+        render_search_results(unique)
 
 
 def render_pdf_citations(citations: list):
-    """'From your PDF' box: page number + the exact passage the answer used."""
-    unique = dedupe_citations(citations)
-    if not unique:
-        return
-    unique.sort(key=lambda c: (c.get("page") is None, c.get("page") or 0))
-    with st.expander(f"📄  From your PDF · {len(unique)} passages", expanded=False):
-        for c in unique:
-            page = f"Page {c['page']}" if c.get("page") else "Passage"
-            source = html.escape(c.get("source") or "")
-            quote = html.escape(clean_snippet(c.get("text", ""), max_len=320))
-            st.markdown(html_block(
-                f"""<div style="background:var(--bg-raised);border:1px solid var(--border);border-left:3px solid var(--accent);
-                border-radius:12px;padding:12px 16px;margin-bottom:10px;">
-                <div style="color:var(--accent-2);font-size:12px;font-weight:700;margin-bottom:6px;">{page}
-                <span style="color:var(--text-4);font-weight:400;"> · {source}</span></div>
-                <div style="color:var(--text-2);font-size:13px;line-height:1.6;font-style:italic;">“{quote}”</div>
-                </div>"""),
-                unsafe_allow_html=True,
-            )
+    """'p. 7' chips under the answer; each opens the exact passage the answer used."""
+    chips = citation_chips_html(citations)
+    if chips:
+        st.markdown(chips, unsafe_allow_html=True)
 
 
 # =====================================================================
 # Live execution trace
 # =====================================================================
-
-def describe_step(node: str, output: dict, seconds: float) -> list:
-    """Turn one node's output into human-readable trace lines (real data, not hardcoded)."""
-    lines = []
-    msgs = output.get("messages", [])
-    if not isinstance(msgs, list):
-        msgs = [msgs]
-
-    for m in msgs:
-        if isinstance(m, AIMessage) and getattr(m, "tool_calls", None):
-            for tc in m.tool_calls:
-                args = ", ".join(f"{k}={_short(v, 60)!r}" for k, v in tc.get("args", {}).items())
-                lines.append(f"🧠 **{node}** decided to call `{tc['name']}`({args})")
-        elif isinstance(m, AIMessage) and m.content:
-            lines.append(f"🧠 **{node}** wrote the answer")
-        elif isinstance(m, ToolMessage):
-            if m.name == "save_memory":
-                lines.append(f"💾 **save_memory** → {_short(m.content, 70)}")
-            else:
-                lines.append(f"🔧 **{m.name or node}** returned {len(str(m.content)):,} characters")
-
-    # non-message state updates (e.g. AI News / Deep Research pipelines)
-    for key, value in output.items():
-        if key in ("messages", "context"):
-            continue
-        if key == "findings" and isinstance(value, list):
-            for f in value:
-                lines.append(f"🔎 **{node}** researched “{_short(f.get('query', ''), 60)}” "
-                             f"({len(f.get('sources', []))} sources)")
-        elif key == "citations" and isinstance(value, list):
-            pages = sorted({c.get("page") for c in value if c.get("page")})
-            lines.append(f"📄 **{node}** retrieved {len(value)} passages"
-                         + (f" (pages {', '.join(map(str, pages))})" if pages else ""))
-        elif isinstance(value, list) and value and all(isinstance(v, str) for v in value):
-            lines.append(f"⚙️ **{node}** → `{key}`: " + "; ".join(_short(v, 50) for v in value))
-        elif isinstance(value, list):
-            lines.append(f"⚙️ **{node}** → `{key}`: {len(value)} items")
-        elif isinstance(value, str) and value:
-            lines.append(f"⚙️ **{node}** → `{key}`: {_short(value, 60)}")
-
-    if not lines:
-        lines.append(f"⚙️ **{node}** finished")
-    lines[-1] += f" · {seconds:.1f}s"
-    return lines
-
 
 def stream_graph_answer(
     graph,
@@ -244,8 +118,11 @@ def stream_graph_answer(
       the live execution trace, collects web sources / PDF citations (shown once,
       under the answer) and notices when the graph pauses for human review.
     Returns the final answer text ("" if the run paused or failed).
+    (Deep Research and AI News don't use this: they run as background jobs, see jobs.py.)
     """
     trace = st.status("Thinking…", expanded=False) if show_trace else None
+    trace_box = trace.empty() if trace is not None else None
+    trace_lines = []
     web_results = []
     pdf_citations = []
 
@@ -273,7 +150,7 @@ def stream_graph_answer(
                     and meta.get("langgraph_node") in answer_nodes
                 ):
                     answer += chunk.content
-                    placeholder.markdown(answer + " ▌")
+                    placeholder.markdown(clean_markdown(answer) + " ▌")
                 continue
 
             for node, node_output in data.items():
@@ -285,8 +162,8 @@ def stream_graph_answer(
                 now = time.perf_counter()
                 step_count += 1
                 if trace is not None:
-                    for line in describe_step(node, node_output, now - last_step):
-                        trace.markdown(line)
+                    trace_lines.extend(describe_step(node, node_output, now - last_step))
+                    trace_box.markdown(timeline_html(trace_lines), unsafe_allow_html=True)
                     trace.update(label=f"Working… ({node})")
                 last_step = now
 
@@ -329,7 +206,7 @@ def stream_graph_answer(
     if not answer:
         slot.empty()
         return ""
-    placeholder.markdown(answer)
+    placeholder.markdown(clean_markdown(answer))
     if show_sources:
         render_pdf_citations(pdf_citations)
         render_sources(web_results)
@@ -349,8 +226,36 @@ def _start_news(timeframe: str):
     st.session_state.timeframe = timeframe
 
 
-def _set_research_action(action: str):
-    st.session_state.research_action = action
+def _set_research_action(action: str, job_id: str):
+    st.session_state.research_action = (action, job_id)
+
+
+def _request_run_again(conversation_id: int):
+    st.session_state.run_again = conversation_id
+
+
+@st.fragment(run_every=1.0)
+def _live_job_view(job_id: str):
+    """
+    Watches a background job and redraws only itself once a second. When the job stops running
+    it reruns the whole page, which then shows the saved report, the plan to review or the error.
+    """
+    job = jobs.get(job_id)
+    if job is None:
+        return
+    snap = job.snapshot()
+    if snap["status"] != "running":
+        st.rerun()
+    if snap["progress_html"]:
+        st.markdown(snap["progress_html"], unsafe_allow_html=True)
+    label = f"Working in the background · {snap['elapsed']:.0f}s · {len(snap['trace'])} steps"
+    with st.expander(label, icon=":material/progress_activity:", expanded=False):
+        st.markdown(timeline_html(snap["trace"]) if snap["trace"] else "Starting…", unsafe_allow_html=True)
+    with st.container(key="ai_msg_live_job"):
+        st.markdown(AI_HEAD, unsafe_allow_html=True)
+        st.markdown(THINKING_HTML, unsafe_allow_html=True)
+        st.caption("This keeps running if you switch modes or chats. Come back any time: "
+                   "the result is saved to this chat.")
 
 
 def _on_feedback(conversation_id: int, index: int, key: str):
@@ -380,6 +285,8 @@ class DisplayResultStreamlit:
         self.user_message = user_message
         self._last_run_id = None
         self._feedback = {}
+        self._job = None             # latest background job of this chat (Deep Research / AI News)
+        self._job_started = False
 
         if "chat_history" not in st.session_state:
             st.session_state.chat_history = []
@@ -407,14 +314,25 @@ class DisplayResultStreamlit:
         self._render_actions(answer, index)
 
     def _next_card_key(self) -> str:
-        # unique per stream (a research run can stream twice in one rerun: pause + auto-approve)
-        return f"ai_msg_live_{len(st.session_state.chat_history)}_{uuid.uuid4().hex[:6]}"
+        # unique per stream (a research run can stream twice in one rerun: pause + auto-approve);
+        # reports get the "ai_msg_report" prefix for the reading layout
+        kind = "report_live" if self.usecase in REPORT_MODES else "live"
+        return f"ai_msg_{kind}_{len(st.session_state.chat_history)}_{uuid.uuid4().hex[:6]}"
 
     # ---------------- rendering ----------------
     def _render_assistant(self, content: str, index: int):
-        with st.container(key=f"ai_msg_{index}"):
+        is_report = self.usecase in REPORT_MODES
+        # sources are kept by the job that wrote this report (while the server keeps it in memory)
+        sources = []
+        if is_report and self._job is not None and self._job.status == "done" and self._job.answer == content:
+            sources = unique_sources(self._job.sources)
+        with st.container(key=f"ai_msg_{'report_' if is_report else ''}{index}"):
             st.markdown(AI_HEAD, unsafe_allow_html=True)
-            st.markdown(content)
+            if is_report:
+                st.markdown(report_header_html(content, sources=len(sources)), unsafe_allow_html=True)
+            st.markdown(clean_markdown(content))
+        if sources:
+            render_sources(sources)
         self._render_actions(content, index)
 
     def _render_actions(self, content: str, index: int):
@@ -422,14 +340,19 @@ class DisplayResultStreamlit:
         if cid is None:
             return
         with st.container(key=f"msgactions_{index}"):
-            c1, c2, _ = st.columns([1.4, 2.4, 6], vertical_alignment="center")
+            c1, c2, c3, _ = st.columns([1.4, 1.3, 2.4, 4.9], vertical_alignment="center")
             with c1:
                 key = f"fb_{cid}_{index}"
                 if key not in st.session_state and index in self._feedback:
                     st.session_state[key] = self._feedback[index]
                 st.feedback("thumbs", key=key, on_change=_on_feedback, args=(cid, index, key))
+            with c2:
+                # Streamlit has no clipboard API; st.code shows the raw text with a built-in copy icon
+                with st.popover("Copy", icon=":material/content_copy:"):
+                    st.caption("Use the copy icon in the top-right corner of the box.")
+                    st.code(content, language="markdown", wrap_lines=True)
             if self.usecase in REPORT_MODES:
-                with c2:
+                with c3:
                     st.download_button(
                         "Download report", data=content, file_name=f"netra-report-{cid}-{index}.md",
                         mime="text/markdown", icon=":material/download:", key=f"dl_{cid}_{index}",
@@ -447,9 +370,16 @@ class DisplayResultStreamlit:
         else:
             title = info["label"]
 
+        if self.usecase == "Netra Agent":   # highlight the second half of the greeting
+            title = f'Hi {first_name}, <span class="hl">what can I help with?</span>'
+
         hint = ""
         if info.get("pdf"):
             hint = '<div class="hero-hint">Attach a PDF with the <b>📎 clip</b> in the message box below.</div>'
+        caps = "".join(
+            f'<span class="cap"><span class="material-symbols-outlined">{icon}</span>{html.escape(text)}</span>'
+            for icon, text in info.get("caps", [])
+        )
 
         # Built on ONE line on purpose: in Markdown, an indented line after a blank line
         # (e.g. when `hint` is empty) becomes a code block and shows raw "</div>".
@@ -458,7 +388,8 @@ class DisplayResultStreamlit:
             f'<div class="hero-badge"><span class="material-symbols-outlined">{info["icon"]}</span></div>'
             f'<div class="hero-title">{title}</div>'
             f'<div class="hero-sub">{html.escape(info["tagline"])}</div>'
-            f'{hint}'
+            + (f'<div class="caps">{caps}</div>' if caps else "")
+            + f'{hint}'
             '</div>',
             unsafe_allow_html=True,
         )
@@ -472,7 +403,7 @@ class DisplayResultStreamlit:
                 with cols[i]:
                     with st.container(key=f"starter_{i}"):
                         st.button(f"{timeframe} digest", icon=f":material/{icon}:", key=f"starter_btn_{i}",
-                                  use_container_width=True, on_click=_start_news, args=(timeframe,))
+                                  width="stretch", on_click=_start_news, args=(timeframe,))
             return
 
         _, middle, _ = st.columns([0.08, 1, 0.08])
@@ -482,7 +413,7 @@ class DisplayResultStreamlit:
                 with cols[i % 2]:
                     with st.container(key=f"starter_{i}"):
                         st.button(prompt, icon=f":material/{icon}:", key=f"starter_btn_{i}",
-                                  use_container_width=True, on_click=_start_prompt, args=(prompt,))
+                                  width="stretch", on_click=_start_prompt, args=(prompt,))
 
     def _render_news_again(self):
         st.markdown('<div class="sidebar-label" style="margin-left:2px">Get another digest</div>', unsafe_allow_html=True)
@@ -491,9 +422,12 @@ class DisplayResultStreamlit:
             with cols[i]:
                 with st.container(key=f"starter_again_{i}"):
                     st.button(timeframe, icon=f":material/{icon}:", key=f"news_again_{i}",
-                              use_container_width=True, on_click=_start_news, args=(timeframe,))
+                              width="stretch", on_click=_start_news, args=(timeframe,))
 
-    def _render_plan_review(self):
+    def _render_plan_review(self, job):
+        text_key = f"research_plan_text_{job.id}"
+        if text_key not in st.session_state:
+            st.session_state[text_key] = "\n".join(job.snapshot()["plan"])
         with st.container(key="plan_review"):
             st.markdown(html_block(
                 """<div class="plan-title">🗺️  Research plan</div>
@@ -501,21 +435,22 @@ class DisplayResultStreamlit:
                 agents start in parallel when you approve.</div>"""),
                 unsafe_allow_html=True,
             )
-            st.text_area("Research plan", key="research_plan_text", height=150, label_visibility="collapsed")
+            st.text_area("Research plan", key=text_key, height=150, label_visibility="collapsed")
             c1, c2, _ = st.columns([2.2, 1.2, 4])
             with c1:
                 st.button("Approve & research", type="primary", icon=":material/play_arrow:", key="plan_go",
-                          on_click=_set_research_action, args=("approve",), use_container_width=True)
+                          on_click=_set_research_action, args=("approve", job.id), width="stretch")
             with c2:
-                st.button("Cancel", key="plan_cancel", on_click=_set_research_action, args=("cancel",),
-                          use_container_width=True)
+                st.button("Cancel", key="plan_cancel", on_click=_set_research_action, args=("cancel", job.id),
+                          width="stretch")
 
     # ---------------- entry point ----------------
     def display_result_on_ui(self):
         history = st.session_state.chat_history
-        pending_research = self.usecase == "Deep Research" and st.session_state.get("research_pending")
+        if self.usecase in BACKGROUND_MODES:
+            self._job = jobs.latest_for(st.session_state.current_conversation_id)
 
-        if not history and not self.user_message and not pending_research:
+        if not history and not self.user_message:
             self._render_welcome()
             return
 
@@ -534,8 +469,10 @@ class DisplayResultStreamlit:
             "Chat with PDF": self._run_chat_with_pdf,
             "Deep Research": self._run_deep_research,
         }.get(self.usecase)
-        if handler:
+        if handler and self.graph is not None:   # graph is None when only showing saved history (no API key)
             handler()
+        if self.usecase in BACKGROUND_MODES and not self._job_started:
+            self._render_job_state()
 
         if self.usecase == "AI News" and st.session_state.chat_history:
             self._render_news_again()
@@ -605,15 +542,11 @@ class DisplayResultStreamlit:
         self._persist_answer(answer)
 
     def _run_ai_news(self):
+        if self._busy() or self._run_again(lambda text: self._start_job({"messages": [HumanMessage(content=text)]})):
+            return
         if not self._start_turn():
             return
-        # answer_nodes is empty: the many map-step LLM calls aren't shown as tokens;
-        # the final report arrives as the save_result node's message.
-        report = stream_graph_answer(
-            self.graph, {"messages": [HumanMessage(content=self.user_message)]}, answer_nodes=set(),
-            config=self._run_config(), show_trace=True, card_key=self._next_card_key(),
-        )
-        self._persist_answer(report)
+        self._start_job({"messages": [HumanMessage(content=self.user_message)]})
 
     def _run_chat_with_pdf(self):
         if not self.user_message:
@@ -634,52 +567,97 @@ class DisplayResultStreamlit:
         from langgraph.types import Command
         from src.langgraphagenticai.nodes.research_nodes import MAX_REVIEWED_QUESTIONS, parse_questions
 
-        pending = st.session_state.get("research_pending")
-        action = st.session_state.pop("research_action", None)
+        job = self._job
+        action, action_job = st.session_state.pop("research_action", None) or (None, None)
+        if job is not None and action_job == job.id and job.status == "paused":
+            if action == "approve":
+                edited = parse_questions(st.session_state.get(f"research_plan_text_{job.id}", ""),
+                                         limit=MAX_REVIEWED_QUESTIONS) or job.plan
+                self._start_research(Command(resume={"plan": edited}), job.thread_id,
+                                     ResearchProgress(total=len(edited), resumed=True))
+                return
+            if action == "cancel":
+                jobs.cancel(job)          # the job view below then offers "Run again"
+                return
 
-        if pending and self.user_message and action is None:
-            # a new topic was typed while a plan was waiting: drop the old plan
-            st.session_state.research_pending = pending = None
-
-        if pending and action == "approve":
-            edited = parse_questions(st.session_state.get("research_plan_text", ""), limit=MAX_REVIEWED_QUESTIONS)
-            st.session_state.research_pending = None
-            self._research(Command(resume={"plan": edited or pending["plan"]}), pending["thread_id"])
+        if self._busy() or self._run_again(lambda text: self._new_research(text)):
             return
-        if pending and action == "cancel":
-            st.session_state.research_pending = None
-            st.info("Research cancelled. Enter a new topic whenever you're ready.")
-            return
-        if pending:
-            self._render_plan_review()
-            return
-
+        if self.user_message and job is not None and job.status == "paused":
+            jobs.cancel(job)              # a new topic replaces a plan that was waiting for approval
         if not self._start_turn():
             return
+        self._new_research(self.user_message)
+
+    def _new_research(self, topic: str):
         thread_id = f"research-{st.session_state.current_conversation_id}-{uuid.uuid4().hex[:8]}"
-        self._research({"messages": [HumanMessage(content=self.user_message)]}, thread_id)
+        self._start_research({"messages": [HumanMessage(content=topic)]}, thread_id, ResearchProgress())
 
-    def _research(self, inputs, thread_id: str):
-        """Run (or resume) the research graph; pause for plan review when enabled."""
-        from langgraph.types import Command
+    def _start_research(self, inputs, thread_id: str, progress: ResearchProgress):
+        self._start_job(inputs, thread_id=thread_id, progress=progress,
+                        auto_approve=not st.session_state.get("research_review", True))
 
-        config = self._run_config({"configurable": {"thread_id": thread_id}, "recursion_limit": 30})
-        report = stream_graph_answer(
-            self.graph, inputs, answer_nodes=set(), config=config,
-            show_sources=True, show_trace=True, card_key=self._next_card_key(),
-        )
+    # ---------------- background jobs (Deep Research / AI News) ----------------
+    def _start_job(self, inputs, thread_id: str = None, progress: ResearchProgress = None, auto_approve: bool = False):
+        base = {"configurable": {"thread_id": thread_id}, "recursion_limit": 30} if thread_id else None
+        job = jobs.start(self.graph, inputs, self._run_config(base), st.session_state.current_conversation_id,
+                         self.usecase, thread_id=thread_id, progress=progress, auto_approve=auto_approve)
+        self._job, self._job_started = job, True
+        _live_job_view(job.id)
 
-        snapshot = self.graph.get_state(config)
-        if snapshot.next:  # paused at human_review
-            plan = snapshot.values.get("plan", [])
-            if st.session_state.get("research_review", True):
-                st.session_state.research_pending = {"thread_id": thread_id, "plan": plan}
-                st.session_state.research_plan_text = "\n".join(plan)
-                self._render_plan_review()
-            else:
-                self._research(Command(resume={"plan": plan}), thread_id)  # auto-approve
+    def _busy(self) -> bool:
+        """A new message while this chat's job is still running: say so instead of starting a second run."""
+        if self.user_message and self._job is not None and self._job.status == "running":
+            st.info("Netra is still working on the previous request in this chat. "
+                    "It will appear here when it's done, or start a **New chat** to ask something else.")
+            self.user_message = None
+            return True
+        return False
+
+    def _run_again(self, start) -> bool:
+        """'Run again' was clicked: re-run the last question of this chat (it is already saved)."""
+        cid = st.session_state.current_conversation_id
+        history = st.session_state.chat_history
+        if cid is None or st.session_state.get("run_again") != cid or not history or history[-1][0] != "user":
+            return False
+        st.session_state.run_again = None
+        start(history[-1][1])
+        return True
+
+    def _render_job_state(self):
+        """Show what the chat's background job is doing, or offer to run an unanswered question again."""
+        cid = st.session_state.current_conversation_id
+        history = st.session_state.chat_history
+        job = self._job
+        snap = job.snapshot() if job is not None else None
+
+        if snap and snap["status"] == "running":
+            _live_job_view(job.id)
             return
-        self._persist_answer(report)
+        if snap and snap["status"] == "paused" and self.usecase == "Deep Research":
+            if snap["progress_html"]:
+                st.markdown(snap["progress_html"], unsafe_allow_html=True)
+            self._render_plan_review(job)
+            return
+        if snap and snap["status"] == "done" and not job.delivered:
+            job.delivered = True
+            if not (history and history[-1] == ("assistant", snap["answer"])):   # reopened chats already have it
+                history.append(("assistant", snap["answer"]))      # the worker already saved it to the DB
+                if job.run_id:
+                    st.session_state.run_ids[f"{cid}:{len(history) - 1}"] = job.run_id
+                st.rerun()
+
+        if not history or history[-1][0] != "user":
+            return
+        # the last question has no answer: the run failed, was cancelled, or was lost in an app restart
+        if snap and snap["status"] == "error":
+            st.error(snap["error"])
+        elif snap and snap["status"] == "cancelled":
+            st.info("Research cancelled.")
+        else:
+            st.info("This request didn't finish (the app may have restarted).")
+        if self.graph is not None:
+            st.button("Run again", icon=":material/refresh:", key=f"run_again_{cid}",
+                      on_click=_request_run_again, args=(cid,))
 
     # ---------------- utils ----------------
     def _run_config(self, base: dict = None) -> dict:
