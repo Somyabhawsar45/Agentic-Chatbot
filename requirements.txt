@@ -4,7 +4,7 @@ langchain_community
 langchain_core
 langchain_groq
 faiss-cpu
-streamlit
+streamlit>=1.67
 tavily-python
 pypdf
 langchain-tavily
@@ -19,3 +19,4 @@ langgraph-checkpoint-postgres
 psycopg[binary]
 psycopg-pool
 fastembed
+Authlib>=1.3.2

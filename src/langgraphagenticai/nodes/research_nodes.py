@@ -20,8 +20,12 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.types import Send, interrupt
 from tavily import TavilyClient
 
+from src.langgraphagenticai.tools.tavily_pool import RotatingTavilyClient
+from src.langgraphagenticai.nodes.tool_limits import invoke_plain
+
 from src.langgraphagenticai.state.state import ResearchState, ResearchTask
 
+WRITER_MAX_TOKENS = 8192    # room for gpt-oss's reasoning AND a full report
 MAX_QUESTIONS = 4            # planner proposes up to this many
 MAX_REVIEWED_QUESTIONS = 6   # the user may add a couple more when reviewing
 MAX_REVISIONS = 1
@@ -45,13 +49,13 @@ def parse_questions(text: str, limit: int = MAX_QUESTIONS) -> list:
 class ResearchTeam:
     def __init__(self, llm, tavily_api_key=None):
         self.llm = llm
-        # api_key=None makes TavilyClient fall back to the TAVILY_API_KEY env var
-        self.tavily = TavilyClient(api_key=tavily_api_key)
+        # the app's Tavily keys in turn (TAVILY_API_KEY + TAVILY_API_KEYS), or the visitor's own key
+        self.tavily = RotatingTavilyClient(tavily_api_key, client_factory=TavilyClient)
 
     # ---------------- PLANNER ----------------
     def planner(self, state: ResearchState) -> dict:
         topic = state["messages"][-1].content
-        response = self.llm.invoke([
+        response = invoke_plain(self.llm, [
             SystemMessage(content=(
                 f"You are a research planner. Today is {date.today().isoformat()}. "
                 f"Break the user's topic into {MAX_QUESTIONS - 1} to {MAX_QUESTIONS} focused web-search "
@@ -93,7 +97,7 @@ class ResearchTeam:
         material = "\n\n".join(
             f"[{i}] {s['title']} ({s['url']})\n{s['content'][:1500]}" for i, s in enumerate(sources, 1)
         )
-        response = self.llm.invoke([
+        response = invoke_plain(self.llm, [
             SystemMessage(content=(
                 "You are a research assistant. From the search results, write 3-6 concise factual "
                 "bullet notes that answer the question. Keep numbers and dates. End each bullet with "
@@ -118,11 +122,17 @@ class ResearchTeam:
                 f"Here is your previous draft:\n{state['draft']}\n\n"
                 f"Reviewer feedback:\n{state['critique']}\n\nRewrite the report fixing these issues."
             )))
-        return {"draft": _text(self.llm.invoke(messages))}
+        # gpt-oss "thinks" before writing and that reasoning uses the same token budget as the report,
+        # so the default budget cut long reports off mid-table. Give the writer plenty of room.
+        response = invoke_plain(self.llm, messages, max_tokens=WRITER_MAX_TOKENS)
+        draft = _text(response)
+        if (getattr(response, "response_metadata", None) or {}).get("finish_reason") == "length":
+            draft = draft.rstrip() + "\n\n*(This report was shortened to fit the length limit.)*"
+        return {"draft": draft}
 
     # ---------------- CRITIC ----------------
     def critic(self, state: ResearchState) -> dict:
-        response = self.llm.invoke([
+        response = invoke_plain(self.llm, [
             SystemMessage(content=(
                 "You are a strict reviewer. Check the report against the topic: is it accurate to the "
                 "notes, complete, well cited and clear? If it is good, reply with exactly APPROVED. "

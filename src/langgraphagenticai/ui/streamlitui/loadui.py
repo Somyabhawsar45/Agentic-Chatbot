@@ -1,4 +1,3 @@
-import base64
 import html
 import os
 import re
@@ -9,8 +8,10 @@ import streamlit as st
 
 from src.langgraphagenticai.ui.uiconfigfile import Config
 from src.langgraphagenticai.database import db_utils
-from src.langgraphagenticai.ui.streamlitui.modes import NAV_ORDER, mode
+from src.langgraphagenticai.ui.streamlitui.modes import NAV_ORDER, hints, mode
+from src.langgraphagenticai.ui.streamlitui.components import css_string, typing_hints_css
 from src.langgraphagenticai.ui.streamlitui.theme import CSS, FONTS, html_block
+from src.langgraphagenticai.ui.streamlitui.brand import eye_html, logo_image
 
 # (internal_usecase_value, material_icon_name, display_label) — kept for compatibility
 NAV_ITEMS = [(u, mode(u)["icon"], mode(u)["label"]) for u in NAV_ORDER]
@@ -83,6 +84,75 @@ def _open_conversation(convo_id: int):
     st.session_state.chat_history = db_utils.get_messages(convo_id)
 
 
+# ---- the ⋯ menu on each history row (callbacks run before the rerun) ----
+
+def _user_id() -> int:
+    return st.session_state.authenticated_user["id"]
+
+
+def _pin_chat(convo_id: int, pinned: bool):
+    db_utils.set_pinned(_user_id(), convo_id, pinned)
+    st.session_state.pending_toast = "Chat pinned" if pinned else "Chat unpinned"
+
+
+def _rename_chat(convo_id: int, key: str):
+    title = (st.session_state.get(key) or "").strip()[:80]
+    if title and db_utils.owns_conversation(_user_id(), convo_id):
+        db_utils.rename_conversation(convo_id, title)
+        st.session_state.pending_toast = "Chat renamed"
+
+
+def _delete_chat(convo_id: int, usecase: str):
+    if not db_utils.owns_conversation(_user_id(), convo_id):
+        return
+    db_utils.delete_conversation(convo_id)
+    if usecase == "Netra Agent":
+        from src.langgraphagenticai.memory.checkpointer import delete_thread
+        delete_thread(convo_id)
+    if st.session_state.current_conversation_id == convo_id:
+        reset_conversation_state()
+    st.session_state.pending_toast = "Chat deleted"
+
+
+def _clear_memory():
+    db_utils.clear_memories(_user_id())
+    st.session_state.pending_toast = "Memory cleared. Netra has forgotten what you told it."
+
+
+def _sign_out(open_tab: str = None):
+    from src.langgraphagenticai import auth_session
+
+    user = st.session_state.authenticated_user or {}
+    auth_session.forget()                        # this browser's "stay signed in" token + cookie
+    if user.get("google"):
+        st.session_state.google_logout = True    # the sign-in page then ends the Google session too
+    st.session_state.signed_out = True
+    st.session_state.authenticated_user = None
+    reset_conversation_state()
+    if open_tab:
+        st.session_state.auth_tab = open_tab   # the sign-in page opens on this tab
+
+
+def history_groups(conversations: list) -> list:
+    """Pinned chats first, then the rest by date."""
+    pinned = [c for c in conversations if c.get("pinned")]
+    rest = [c for c in conversations if not c.get("pinned")]
+    return ([("Pinned", pinned)] if pinned else []) + group_by_date(rest[:40])
+
+
+def short_model_name(model: str) -> str:
+    """'openai/gpt-oss-20b' -> 'gpt-oss-20b' for the small model chip."""
+    return (model or "").rsplit("/", 1)[-1] or "Model"
+
+
+def account_status(user: dict, used: int, limit: int) -> str:
+    """The small line under the name on the account card."""
+    if user.get("guest"):
+        left = max(0, limit - used)
+        return f"{left} message{'' if left == 1 else 's'} left"
+    return "@" + (user.get("username") or "")
+
+
 class LoadStreamlitUI:
     def __init__(self):
         self.config = Config()
@@ -90,11 +160,10 @@ class LoadStreamlitUI:
 
     # ------------------------------------------------------------------
     def load_streamlit_ui(self):
-        from PIL import Image
 
         st.set_page_config(
             page_title="Netra | Agentic AI",
-            page_icon=Image.open(LOGO_PATH) if LOGO_PATH.exists() else "🤖",
+            page_icon=logo_image(64) or "🤖",          # a small copy, not the 870 KB original
             layout="wide",
             initial_sidebar_state="auto",   # expanded on desktop, collapsed on phones
         )
@@ -128,9 +197,7 @@ class LoadStreamlitUI:
             self._render_new_chat()
             self._render_usecase_nav()
             self._history_slot = st.empty()  # filled below, refreshed by render_history(final=True)
-            st.markdown("<hr/>", unsafe_allow_html=True)
-            self._render_account_menu()      # user chip -> memory + sign out
-            self._render_version_footer()
+            self._render_account_menu()      # account card -> memory + sign out
         self._history_signature = None
         self.render_history()
 
@@ -141,14 +208,11 @@ class LoadStreamlitUI:
 
     # ------------------------------------------------------------------
     def _render_logo(self):
-        logo_html = ""
-        if LOGO_PATH.exists():
-            encoded = base64.b64encode(LOGO_PATH.read_bytes()).decode()
-            logo_html = f'<img src="data:image/png;base64,{encoded}" class="sidebar-logo-img" />'
+        logo_html = eye_html(28)      # the blinking Netra eye (small cached copy of the logo)
         st.markdown(html_block(
             f"""<div class="sidebar-logo-wrap"><div class="sidebar-logo-row">{logo_html}
             <span class="sidebar-logo-text">Netra</span></div>
-            <div class="sidebar-logo-tagline">See Beyond.</div></div>"""),
+            <div class="sidebar-logo-tagline">See beyond.</div></div>"""),
             unsafe_allow_html=True,
         )
 
@@ -175,12 +239,12 @@ class LoadStreamlitUI:
         st.markdown(html_block(
             f"""<style>
             section[data-testid="stSidebar"] div[class*="st-key-{active}"] button{{
-                background: linear-gradient(90deg, rgba(79,142,247,.20), rgba(79,142,247,.06)) !important;
-                border-color: rgba(79,142,247,.32) !important;
+                background: linear-gradient(135deg, var(--accent), #2a5bd7) !important;
+                border-color: transparent !important; box-shadow: 0 3px 10px rgba(42,91,215,.18);
             }}
             section[data-testid="stSidebar"] div[class*="st-key-{active}"] button p,
             section[data-testid="stSidebar"] div[class*="st-key-{active}"] button span{{ color: #ffffff !important; font-weight: 600 !important; }}
-            section[data-testid="stSidebar"] div[class*="st-key-{active}"] button [data-testid="stIconMaterial"]{{ color: var(--accent-2) !important; }}
+            section[data-testid="stSidebar"] div[class*="st-key-{active}"] button [data-testid="stIconMaterial"]{{ color: #ffffff !important; }}
             </style>"""),
             unsafe_allow_html=True,
         )
@@ -204,7 +268,8 @@ class LoadStreamlitUI:
         """
         user_id = st.session_state.authenticated_user["id"]
         conversations = db_utils.get_conversations(user_id, self.user_controls["selected_usecase"])
-        signature = (tuple((c["id"], c["title"]) for c in conversations), st.session_state.current_conversation_id)
+        signature = (tuple((c["id"], c["title"], c.get("pinned")) for c in conversations),
+                     st.session_state.current_conversation_id)
         if final and signature == self._history_signature:
             return
         self._history_signature = signature
@@ -212,10 +277,10 @@ class LoadStreamlitUI:
             self._render_history(conversations, stage="b" if final else "a")
 
     def _render_history(self, conversations: list, stage: str):
-        st.markdown('<div class="sidebar-label">History</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sidebar-label">Recent</div>', unsafe_allow_html=True)
         if not conversations:
-            st.markdown('<div class="hist-empty">Your chats in this mode will appear here.</div>',
-                        unsafe_allow_html=True)
+            st.markdown('<div class="hist-empty"><span class="material-symbols-outlined">add_comment</span>'
+                        'No chats yet.<br>Ask anything to start.</div>', unsafe_allow_html=True)
             return
 
         if len(conversations) > 8:
@@ -231,67 +296,71 @@ class LoadStreamlitUI:
                     return
 
         with st.container(key=f"histlist_{stage}"):
-            for group, items in group_by_date(conversations[:40]):
+            for group, items in history_groups(conversations):
                 st.markdown(f"<div class='hist-group'>{group}</div>", unsafe_allow_html=True)
                 for convo in items:
                     self._render_history_item(convo, stage)
 
     def _render_history_item(self, convo: dict, stage: str):
-        """One clean row per chat (rename/delete live in Settings > This chat)."""
+        """One row per chat; its ⋯ menu (shown on hover) pins, renames or deletes it."""
         convo_id = convo["id"]
+        pinned = bool(convo.get("pinned"))
         state = "on" if st.session_state.current_conversation_id == convo_id else "off"
-        with st.container(key=f"histitem_{state}_{stage}_{convo_id}"):
-            st.button(truncate(convo["title"], 34), key=f"convo_{stage}_{convo_id}", width="stretch",
-                      help=convo["title"], on_click=_open_conversation, args=(convo_id,))
+        usecase = self.user_controls["selected_usecase"]
+        with st.container(key=f"histitem_{state}_{stage}_{convo_id}", horizontal=True,
+                          vertical_alignment="center", gap="small"):
+            st.button(truncate(convo["title"], 30), key=f"convo_{stage}_{convo_id}", width="stretch",
+                      help=convo["title"], on_click=_open_conversation, args=(convo_id,),
+                      icon=":material/keep:" if pinned else None)
+            with st.popover("", icon=":material/more_horiz:", help="Chat options"):
+                # a compact menu: Pin, Rename (type and press Enter), Delete
+                st.markdown('<span class="pop-mark pop-hist"></span>', unsafe_allow_html=True)
+                st.button("Unpin" if pinned else "Pin", icon=":material/keep:", width="stretch",
+                          key=f"pin_{stage}_{convo_id}", on_click=_pin_chat, args=(convo_id, not pinned))
+                rename_key = f"ren_{stage}_{convo_id}"
+                st.text_input("Rename", value=convo["title"], key=rename_key, max_chars=80,
+                              label_visibility="collapsed", placeholder="Rename, then press Enter",
+                              on_change=_rename_chat, args=(convo_id, rename_key))
+                with st.container(key=f"dangerzone_h{stage}_{convo_id}"):
+                    st.button("Delete", icon=":material/delete:", width="stretch", key=f"del_{stage}_{convo_id}",
+                              on_click=_delete_chat, args=(convo_id, usecase))
 
     # ------------------------------------------------------------------
     def _render_account_menu(self):
-        """User chip that opens a menu: long-term memory + sign out."""
+        """Account card at the bottom: avatar, name, a status line, and a ⋯ menu (memory, sign out)."""
+        from src.langgraphagenticai.settings import guest_message_limit
+
         user = st.session_state.authenticated_user
         user_id = user["id"]
         display_name = user.get("name") or user.get("username") or "You"
         initials = "".join(part[0] for part in display_name.split()[:2]).upper() or "U"
-        memories = db_utils.get_memories(user_id)
+        used = db_utils.count_user_messages(user_id) if user.get("guest") else 0
+        status = account_status(user, used, guest_message_limit())
 
-        with st.container(key="account"):
-            with st.popover(f"{initials}   {truncate(display_name, 20)}", width="stretch"):
-                st.markdown(html_block(
-                    f"""<div class="user-chip"><div class="user-avatar">{html.escape(initials)}</div>
-                    <div><div class="user-name">{html.escape(display_name)}</div>
-                    <div class="user-handle">@{html.escape(user.get('username', ''))}</div></div></div>"""),
-                    unsafe_allow_html=True,
-                )
+        # the round avatar with the initials is drawn by CSS in front of the name on the button
+        st.markdown(f"<style>div[class*='st-key-acctmenu'] [data-testid='stPopoverButton']::before"
+                    f"{{content:{css_string(initials[:2])};}}</style>", unsafe_allow_html=True)
 
-                st.markdown(f'<div class="menu-label">🧠 What Netra remembers · {len(memories)}</div>',
-                            unsafe_allow_html=True)
-                if not memories:
-                    st.caption("Nothing yet. Tell the Netra Agent about yourself, e.g. "
-                               "*“Remember I'm a backend developer”*.")
-                for m in memories:
-                    c1, c2 = st.columns([9, 1], vertical_alignment="center")
-                    c1.markdown(f"<div class='mem-item'>{html.escape(m['content'])}</div>", unsafe_allow_html=True)
-                    with c2:
-                        with st.container(key=f"memdel_{m['id']}"):
-                            if st.button("✕", key=f"memx_{m['id']}", help="Forget this"):
-                                db_utils.delete_memory(user_id, m["id"])
-                                st.rerun()
-                if memories and st.button("Forget everything", key="mem_clear", icon=":material/delete_sweep:",
-                                          width="stretch"):
-                    db_utils.clear_memories(user_id)
-                    st.rerun()
-
-                st.divider()
-                if st.button("Sign out", icon=":material/logout:", key="signout_btn", width="stretch"):
-                    st.session_state.authenticated_user = None
-                    reset_conversation_state()
-                    st.rerun()
-
-    def _render_version_footer(self):
-        from src.langgraphagenticai.settings import tracing_enabled
-
-        storage = "Cloud DB" if db_utils.use_postgres() else "Local DB"
-        tracing = " · LangSmith" if tracing_enabled() else ""
-        st.markdown(f'<div class="version-footer">Netra v3 · {storage}{tracing}</div>', unsafe_allow_html=True)
+        with st.container(key="acctcard", horizontal=True, vertical_alignment="center", gap="small"):
+            with st.container(key="acctmenu", width="content"):
+                with st.popover(truncate(display_name, 20), help="Account"):
+                    sub = status + (" · chats kept 2 days" if user.get("guest") else "")
+                    st.markdown(html_block(
+                        f"""<div class="user-chip acct-head"><div class="user-avatar">{html.escape(initials)}</div>
+                        <div><div class="user-name">{html.escape(display_name)}</div>
+                        <div class="user-handle">{html.escape(sub)}</div></div></div>"""),
+                        unsafe_allow_html=True,
+                    )
+                    with st.container(key="acct_btns", horizontal=True, gap="small"):
+                        if user.get("guest"):
+                            st.button("Sign up", key="guest_signup", width="stretch",
+                                      icon=":material/person_add:", on_click=_sign_out, args=("Sign Up",))
+                        st.button("Sign out", icon=":material/logout:", key="signout_btn", width="stretch",
+                                  on_click=_sign_out)
+            with st.container(key="acctgear", width="content"):
+                with st.popover("", icon=":material/settings:", help="Settings"):
+                    self._render_settings_body(self.user_controls["selected_usecase"],
+                                               self.config.get_groq_model_options())
 
     # ------------------------------------------------------------------
     def _render_topbar(self):
@@ -307,63 +376,67 @@ class LoadStreamlitUI:
                 chips += (f'<span class="chip"><span class="material-symbols-outlined">attach_file</span>'
                           f'{html.escape(truncate(pdf_name, 28))}</span>')
 
-        with st.container(key="topbar"):
-            left, right = st.columns([5, 1.6], vertical_alignment="center")
-            with left:
-                st.markdown(html_block(
-                    f"""<div class="topbar-left">
-                        <div class="topbar-icon"><span class="material-symbols-outlined">{info['icon']}</span></div>
-                        <div><div class="topbar-title">{info['label']}{chips}</div>
-                        <div class="topbar-sub">Groq · {html.escape(model_name)}</div></div>
-                    </div>"""),
-                    unsafe_allow_html=True,
+        # the empty message box types out example questions for this mode
+        st.markdown(typing_hints_css(hints(usecase)), unsafe_allow_html=True)
+
+        with st.container(key="topbar", horizontal=True, vertical_alignment="center", gap="small"):
+            # left: the mode, only inside a chat (the welcome screen already says it in big letters)
+            in_chat = bool(st.session_state.chat_history or st.session_state.current_conversation_id)
+            label = (f'<div class="topbar-mode"><span class="material-symbols-outlined">{info["icon"]}</span>'
+                     f'{html.escape(info["label"])}{chips}</div>') if in_chat else "&nbsp;"
+            st.markdown(label, unsafe_allow_html=True, width="stretch")
+            # right: the floating model chip (Settings sit next to your name in the sidebar)
+            with st.popover(short_model_name(model_name), icon=":material/memory:", help="Model"):
+                st.markdown('<span class="pop-mark pop-model"></span>', unsafe_allow_html=True)
+                self.user_controls["selected_llm"] = "Groq"
+                self.user_controls["selected_groq_model"] = st.radio(
+                    "Model", model_options, key="selected_groq_model", label_visibility="collapsed",
+                    format_func=short_model_name,
                 )
-            with right:
-                with st.popover("⚙  Settings", width="stretch"):
-                    self._render_settings_body(usecase, model_options)
+                st.caption("Switches to the other model if busy.")
 
     def _render_settings_body(self, usecase: str, model_options: list):
-        self.user_controls["selected_llm"] = "Groq"
-        self.user_controls["selected_groq_model"] = st.selectbox(
-            "Model", model_options, key="selected_groq_model"
-        )
-
+        st.markdown('<span class="pop-mark pop-settings"></span>', unsafe_allow_html=True)   # sizes this menu (theme.py)
         self.user_controls["GROQ_API_KEY"] = self._api_key_input("Groq API Key", "GROQ_API_KEY")
         # True when the visitor relies on the app's own key -> daily limit applies
         builtin = not st.session_state.get("user_GROQ_API_KEY", "").strip()
         self.user_controls["GROQ_API_KEY_IS_BUILTIN"] = builtin
         if builtin and self.user_controls["GROQ_API_KEY"]:
-            from src.langgraphagenticai.settings import daily_message_limit
-            used = db_utils.count_user_messages_today(st.session_state.authenticated_user["id"])
-            st.caption(f"Demo key · {used}/{daily_message_limit()} messages used today")
+            from src.langgraphagenticai.settings import daily_message_limit, guest_message_limit
+            user = st.session_state.authenticated_user
+            if user.get("guest"):
+                used = db_utils.count_user_messages(user["id"])
+                st.caption(f"Guest · {used}/{guest_message_limit()} free messages used")
+            else:
+                used = db_utils.count_user_messages_today(user["id"])
+                st.caption(f"Demo key · {used}/{daily_message_limit()} messages used today")
 
         if usecase in WEB_MODES:
             self.user_controls["TAVILY_API_KEY"] = self._api_key_input(
                 "Tavily API Key", "TAVILY_API_KEY", required=(usecase != "Netra Agent")
             )
 
-        if usecase == "Deep Research":
-            st.toggle("Review the plan before agents start", value=True, key="research_review")
 
         self._render_chat_options(usecase)
+        self._render_memory_settings()
+
+    def _render_memory_settings(self):
+        """What Netra remembers isn't listed anywhere, but people can wipe it from Settings."""
+        user_id = st.session_state.authenticated_user["id"]
+        count = len(db_utils.get_memories(user_id))
+        if not count:
+            return
+        st.markdown('<div class="menu-label">Memory</div>', unsafe_allow_html=True)
+        st.caption(f"Netra remembers {count} thing{'' if count == 1 else 's'} you told it.")
+        st.button("Clear memory", icon=":material/delete_sweep:", key="mem_clear", width="stretch",
+                  on_click=_clear_memory)
 
     def _render_chat_options(self, usecase: str):
-        """Rename / export / delete the open chat (kept out of the history list for a clean sidebar)."""
-        convo_id = st.session_state.current_conversation_id
-        if convo_id is None:
+        """Export the open chat (pin / rename / delete live in the history row's ⋯ menu)."""
+        if st.session_state.current_conversation_id is None:
             return
-        st.markdown('<div class="menu-label">This chat</div>', unsafe_allow_html=True)
-
-        user_id = st.session_state.authenticated_user["id"]
-        current = next((c for c in db_utils.get_conversations(user_id, usecase) if c["id"] == convo_id), None)
-        if current:
-            new_title = st.text_input("Name", value=current["title"], key=f"rename_{convo_id}")
-            if new_title.strip() and new_title.strip() != current["title"]:
-                if st.button("Save name", key=f"rensave_{convo_id}", icon=":material/edit:", width="stretch"):
-                    db_utils.rename_conversation(convo_id, new_title)
-                    st.rerun()
-
         if st.session_state.chat_history:
+            st.markdown('<div class="menu-label">This chat</div>', unsafe_allow_html=True)
             st.download_button(
                 "Export as Markdown",
                 data=chat_as_markdown(usecase, st.session_state.chat_history),
@@ -373,15 +446,6 @@ class LoadStreamlitUI:
                 width="stretch",
                 key="export_chat",
             )
-
-        with st.container(key="dangerzone"):
-            if st.button("Delete this chat", key=f"del_{convo_id}", icon=":material/delete:", width="stretch"):
-                db_utils.delete_conversation(convo_id)
-                if usecase == "Netra Agent":
-                    from src.langgraphagenticai.memory.checkpointer import delete_thread
-                    delete_thread(convo_id)
-                reset_conversation_state()
-                st.rerun()
 
     def _api_key_input(self, label: str, secret_name: str, required: bool = True) -> str:
         """

@@ -71,3 +71,24 @@ def test_critic_triggers_at_most_one_revision(fake_llm_factory, monkeypatch):
     result, writer_calls = _run(fake_llm_factory, monkeypatch, "- add more numbers")
     assert writer_calls == 2                        # draft + one revision, then finalize
     assert result["messages"][-1].content.startswith("# Report")
+
+
+def test_writer_gets_a_big_token_budget_and_flags_a_cut_off_report():
+    from langchain_core.messages import AIMessage
+    from src.langgraphagenticai.nodes.research_nodes import ResearchTeam, WRITER_MAX_TOKENS
+
+    class Recorder:
+        def __init__(self, finish):
+            self.kwargs, self.finish = None, finish
+
+        def invoke(self, messages, **kwargs):
+            self.kwargs = kwargs
+            return AIMessage(content="# Report\n| a | b |", response_metadata={"finish_reason": self.finish})
+
+    llm = Recorder("stop")
+    nodes = ResearchTeam(llm)
+    out = nodes.writer({"topic": "t", "findings": []})
+    assert llm.kwargs == {"max_tokens": WRITER_MAX_TOKENS} and WRITER_MAX_TOKENS >= 8000
+    assert "shortened" not in out["draft"]
+    cut = ResearchTeam(Recorder("length")).writer({"topic": "t", "findings": []})
+    assert cut["draft"].endswith("*(This report was shortened to fit the length limit.)*")

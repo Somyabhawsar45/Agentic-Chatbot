@@ -35,6 +35,12 @@
 - 📰 **News Summary** — Map-Reduce summarization across multiple sources
 - 🤖 **Basic Chatbot** — Multi-turn conversation, answers stream token-by-token
 - 🔐 **User Authentication** — bcrypt password hashing; private, per-user chat history (ChatGPT-style sidebar)
+- 🔑 **Stay signed in + Google sign-in** — new accounts go straight into the app; "Keep me signed in" skips the login page for 30 days (random token in a cookie, only its hash stored, removed on sign-out); optional "Continue with Google" via Streamlit's built-in OpenID Connect
+- ⚡ **Try without signing up** — one-click guest sessions with their own message allowance; guest data is deleted after 2 days
+- 🎙 **Voice input** — a mic in the chat box; voice notes are transcribed by Groq Whisper (`whisper-large-v3-turbo`)
+- 🔗 **Share an answer** — a public read-only link to one answer (never the rest of the chat), removable any time
+- 🧵 **Long runs keep going** — Deep Research and News run in the background, so switching modes doesn't stop them; the result is saved to the chat
+- 🛟 **Rate-limit fallback** — on a Groq rate limit the app switches to a backup key or a fallback model instead of failing
 - ☁️ **Persistent cloud storage** — users, chats, agent memory and PDF indexes in Postgres (Supabase), so nothing resets when the app restarts. Falls back to a local SQLite file when no database URL is set
 - 📈 **Observability** — LangSmith tracing of every graph run, labelled by feature, user and conversation
 - 📏 **Evaluation harness** — 31 golden questions (26 answerable, 5 not in the document) run through the app's real PDF-RAG pipeline; scores retrieval (hit rate, top-1, MRR), answer accuracy, page citations, abstention instead of guessing, optional LLM-judge faithfulness, latency and tokens. A GitHub Actions job fails the build if quality drops
@@ -54,7 +60,7 @@ AI News:        START → fetch_news → summarize_news (map → reduce) → sav
 | Layer | Tech |
 |-------|------|
 | Framework | LangGraph, LangChain |
-| LLM | Groq (gpt-oss-20b / 120b, llama-3.1-8b) |
+| LLM | Groq (gpt-oss-20b / 120b, each the other's fallback) |
 | Web Search | Tavily |
 | Embeddings | all-MiniLM-L6-v2 run locally with ONNX via FastEmbed (batch 8, 256 tokens, ~0.3 GB peak); HuggingFace Inference API optional |
 | Vector Store | FAISS (serialized into the database per conversation) |
@@ -78,9 +84,21 @@ TAVILY_API_KEY=your_key
 # optional
 HUGGINGFACEHUB_API_TOKEN=your_token          # only if EMBEDDINGS_PROVIDER=huggingface (default is local, no key)
 EMBEDDINGS_PROVIDER=fastembed                # fastembed (local, default) | huggingface (hosted API, needs credits)
-MAX_PDF_CHUNKS=1500                          # refuse PDFs larger than this many passages
+MAX_PDF_CHUNKS=500                           # refuse PDFs larger than this many passages (protects the RAM)
 DATABASE_URL=postgresql://...                # empty = local SQLite file
 DAILY_MESSAGE_LIMIT=30                       # per user/day on the built-in Groq key
+GUEST_MESSAGE_LIMIT=10                       # messages per guest ("Try it now, no sign-up")
+GLOBAL_DAILY_LIMIT=600                       # messages/day for everyone together on the built-in key (0 = no cap)
+MAX_BACKGROUND_RUNS=3                        # Deep Research / News runs at once; the rest wait in line
+RESEARCH_DAILY_LIMIT=3                       # Deep Research runs/day per account on the app's keys (guests: GUEST_RESEARCH_LIMIT=1)
+GUESTS_PER_IP_PER_DAY=10                     # new guest sessions per network per day (GUESTS_PER_DAY=300 in total)
+SIGNUPS_PER_IP_PER_HOUR=10                   # new accounts per network per hour (SIGNUPS_PER_DAY=150 in total)
+LOGIN_ATTEMPTS=5                             # wrong passwords before a username is locked for 15 minutes
+DB_POOL_SIZE=10                              # Postgres connections (stay under your pooler's limit)
+NETRA_API_KEY=...                            # REST API only: required X-API-Key header (Scholr sends it)
+GROQ_API_KEYS=key2,key3                      # extra built-in keys, tried if one is rate-limited or rejected
+TAVILY_API_KEYS=tvly-2,tvly-3                # extra Tavily keys, tried when one runs out of credits or is rejected
+GROQ_FALLBACK_MODELS=openai/gpt-oss-120b    # models to fall back to on rate limits (each has its own limit)
 LANGSMITH_TRACING=true
 LANGSMITH_API_KEY=your_langsmith_key
 LANGSMITH_PROJECT=netra-ai
@@ -137,12 +155,21 @@ python -m mcp_server                  # stdio: for Claude Desktop / Claude Code
 Tools: `list_documents`, `search_document`, `read_page`, `index_document`, `web_search`, `save_memory`, `recall_memories`, `forget_memory`.
 Client configuration, the full tool list and security notes are in [`mcp_server/README.md`](mcp_server/README.md).
 
-### Run the REST API (optional)
-The same LangGraph graphs are also exposed through FastAPI:
+### Run the REST API (optional, used by Scholr)
+A small FastAPI service answers course questions for Scholr (an e-learning app):
 ```bash
 uvicorn src.langgraphagenticai.api.main:app --reload
 ```
-Endpoints live under `/api/v1` (`/chat`, `/search`, `/rag`, `/course-doubt`, `/index-course`), plus `/health`. Interactive docs at `http://localhost:8000/docs`.
+`POST /api/v1/index-course` (replace a course's index) and `POST /api/v1/course-doubt` (answer only from that
+course), plus a public `/health`. Interactive docs at `http://localhost:8000/docs`.
+
+**Security**
+- **API key:** every `/api/v1` call needs `X-API-Key: $NETRA_API_KEY`, compared in constant time. With no key configured the API refuses everything (fails closed).
+- **No IDOR:** course ids must be 24-hex MongoDB ObjectIds, and course retrieval reads only the course index table. A guessable conversation number like `"5"` is rejected with a 422 and can never reach a user's private PDF chat. An earlier version allowed exactly that; it is covered by tests now.
+- **Small surface:** the unused `/chat`, `/search` and `/rag` endpoints were removed. There is no CORS middleware, since only Scholr's server calls the API.
+- **Rate limits:** per caller per minute (`NETRA_API_DOUBTS_PER_MIN`, default 60; `NETRA_API_INDEX_PER_MIN`, default 20); over the limit is a 429.
+- **Prompt injection:** course text is fenced as data and the model is told to ignore instructions inside it.
+- **Failures:** if Groq is down the API returns a clean 503, never a stack trace.
 
 ## 📁 Project Structure
 ```
@@ -163,12 +190,43 @@ mcp_server/                     # MCP server: PDF search, web search, memory as 
 tests/                          # offline pytest suite
 ```
 
-## ☁ Deploying (Streamlit Community Cloud)
+## ☁ Deploying (Hugging Face Spaces, free)
+The repo ships a `Dockerfile` (Python 3.12, port 7860, PDF model baked into the image) and a GitHub Action
+that copies every push to a Hugging Face Space.
+1. On huggingface.co: **New Space** → SDK **Docker** → blank template → CPU basic (free) → public.
+2. In the Space: **Settings → Variables and secrets** → add your keys as **secrets** (`GROQ_API_KEY`,
+   `TAVILY_API_KEY`, `DATABASE_URL`, limits like `GUEST_MESSAGE_LIMIT`...). They become environment variables.
+3. On huggingface.co: **Settings → Access Tokens** → a token with **write** permission.
+4. In this GitHub repo: **Settings → Secrets and variables → Actions** → secret `HF_TOKEN` (the token),
+   variables `HF_SPACE` (e.g. `yourname/netra-ai`) and `APP_URL` (e.g. `https://yourname-netra-ai.hf.space`).
+5. Push to `main` (or run the "Deploy to Hugging Face Space" workflow). The Space builds in a few minutes.
+
+Share the direct `https://<user>-<space>.hf.space` address: inside the huggingface.co Space page the app runs
+in a frame, where browsers block the "Keep me signed in" cookie.
+
+The same container also runs on any Docker host: `docker build -t netra . && docker run -p 7860:7860 --env-file .env netra`.
+
+### Streamlit Community Cloud (alternative)
 Put the same keys in **App settings → Secrets** (TOML format, e.g. `GROQ_API_KEY = "..."`).
 
 **Persistent database (free, Supabase):** create a project at supabase.com → **Connect** →
 copy the **Session pooler** connection string → set it as `DATABASE_URL` (replace `[YOUR-PASSWORD]`).
 Tables are created automatically on first start.
+
+**Continue with Google (optional):** the button appears only once this is set up.
+1. In [Google Cloud Console](https://console.cloud.google.com) create a project → **APIs & Services → OAuth consent screen** (External, add your email as a test user).
+2. **Credentials → Create credentials → OAuth client ID** → *Web application*. Add the authorized redirect URI
+   `https://<your-app>.streamlit.app/oauth2callback` (and `http://localhost:8501/oauth2callback` for local runs).
+3. Add to the app's secrets (locally: `.streamlit/secrets.toml`, which is git-ignored):
+```toml
+[auth]
+redirect_uri = "https://<your-app>.streamlit.app/oauth2callback"
+cookie_secret = "a long random string"
+client_id = "....apps.googleusercontent.com"
+client_secret = "..."
+server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
+```
+A Google account signs into the Netra account with the same email, or a new account is created for it.
 
 **LangSmith:** create an API key at smith.langchain.com and set `LANGSMITH_TRACING = "true"`,
 `LANGSMITH_API_KEY` and `LANGSMITH_PROJECT`.

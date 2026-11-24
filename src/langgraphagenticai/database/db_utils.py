@@ -8,11 +8,13 @@ Two backends, same functions:
 
 SQL is written once with `?` placeholders; `_run` converts them to `%s` for Postgres.
 """
+import hashlib
 import os
+import secrets
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 
 DB_PATH = os.path.join(os.getcwd(), "chat_history.db")
 
@@ -51,6 +53,13 @@ def _probe_postgres() -> None:
         _pg_error = f"{type(e).__name__}: {first_line}"
 
 
+def _pool_size() -> int:
+    try:
+        return max(2, int(os.environ.get("DB_POOL_SIZE", "10")))
+    except ValueError:
+        return 10
+
+
 def get_pg_pool():
     """Shared Postgres connection pool (also used by the LangGraph checkpointer)."""
     global _pg_pool
@@ -62,7 +71,8 @@ def get_pg_pool():
             _pg_pool = ConnectionPool(
                 conninfo=os.environ["DATABASE_URL"],
                 min_size=1,
-                max_size=5,
+                # room for several visitors at once; keep it under the Supabase pooler's limit (15 on free)
+                max_size=_pool_size(),
                 # autocommit + dict rows are required by langgraph's PostgresSaver;
                 # prepare_threshold=None keeps it working behind Supabase's pooler
                 kwargs={"autocommit": True, "prepare_threshold": None, "row_factory": dict_row},
@@ -153,6 +163,29 @@ _SQLITE_SCHEMA = [
         created_at TEXT NOT NULL,
         PRIMARY KEY (conversation_id, message_index)
     )""",
+    """CREATE TABLE IF NOT EXISTS shared_reports (
+        token TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        conversation_id INTEGER NOT NULL,
+        message_index INTEGER NOT NULL,
+        usecase TEXT NOT NULL,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS login_tokens (
+        token_hash TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS auth_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL,
+        key TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_auth_events ON auth_events(kind, key, created_at)",
     """CREATE TABLE IF NOT EXISTS course_indexes (
         course_id TEXT PRIMARY KEY,
         data BLOB NOT NULL,
@@ -203,6 +236,29 @@ _POSTGRES_SCHEMA = [
         created_at TEXT NOT NULL,
         PRIMARY KEY (conversation_id, message_index)
     )""",
+    """CREATE TABLE IF NOT EXISTS shared_reports (
+        token TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        conversation_id INTEGER NOT NULL,
+        message_index INTEGER NOT NULL,
+        usecase TEXT NOT NULL,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS login_tokens (
+        token_hash TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS auth_events (
+        id SERIAL PRIMARY KEY,
+        kind TEXT NOT NULL,
+        key TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_auth_events ON auth_events(kind, key, created_at)",
     """CREATE TABLE IF NOT EXISTS course_indexes (
         course_id TEXT PRIMARY KEY,
         data BYTEA NOT NULL,
@@ -224,7 +280,18 @@ def init_db():
         _probe_postgres()
     for stmt in (_POSTGRES_SCHEMA if use_postgres() else _SQLITE_SCHEMA):
         _run(stmt)
+    _add_pinned_column()
     _initialized = True
+
+
+def _add_pinned_column():
+    """Older databases have no 'pinned' column on conversations: add it once (no data is touched)."""
+    if use_postgres():
+        _run("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS pinned INTEGER NOT NULL DEFAULT 0")
+        return
+    columns = {row["name"] for row in _run("PRAGMA table_info(conversations)", fetch="all")}
+    if "pinned" not in columns:
+        _run("ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
 
 
 # ------------------------ USERS ------------------------
@@ -269,12 +336,24 @@ def add_message(conversation_id: int, role: str, content: str):
 
 
 def get_conversations(user_id: int, usecase: str):
-    """Return list of conversations for a user+usecase, newest first."""
+    """Return list of conversations for a user+usecase: pinned first, then newest first."""
     return _run(
-        "SELECT id, title, created_at FROM conversations WHERE user_id = ? AND usecase = ? ORDER BY id DESC",
+        "SELECT id, title, created_at, pinned FROM conversations WHERE user_id = ? AND usecase = ? "
+        "ORDER BY pinned DESC, id DESC",
         (user_id, usecase),
         fetch="all",
     )
+
+
+def set_pinned(user_id: int, conversation_id: int, pinned: bool):
+    """Pin or unpin one of the user's own chats (the user_id check stops touching anyone else's)."""
+    _run("UPDATE conversations SET pinned = ? WHERE id = ? AND user_id = ?",
+         (1 if pinned else 0, conversation_id, user_id))
+
+
+def owns_conversation(user_id: int, conversation_id: int) -> bool:
+    return _run("SELECT 1 AS found FROM conversations WHERE id = ? AND user_id = ?",
+                (conversation_id, user_id), fetch="one") is not None
 
 
 def get_messages(conversation_id: int):
@@ -291,6 +370,13 @@ def delete_conversation(conversation_id: int):
     _run("DELETE FROM pdf_indexes WHERE conversation_id = ?", (conversation_id,))
     _run("DELETE FROM feedback WHERE conversation_id = ?", (conversation_id,))
     _run("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+
+
+def count_all_user_messages_today() -> int:
+    """Messages sent today by everyone together (for the app-wide cap on the built-in key)."""
+    row = _run("SELECT COUNT(*) AS n FROM messages WHERE role = 'user' AND created_at >= ?",
+               (datetime.now().date().isoformat(),), fetch="one")
+    return int(row["n"]) if row else 0
 
 
 def count_user_messages_today(user_id: int) -> int:
@@ -448,3 +534,189 @@ def get_feedback(conversation_id: int) -> dict:
         return {}
     rows = _run("SELECT message_index, score FROM feedback WHERE conversation_id = ?", (conversation_id,), fetch="all")
     return {r["message_index"]: r["score"] for r in rows}
+
+
+# ------------------------ GUESTS ------------------------
+# "Try without an account": a throwaway user. Guests are recognised by BOTH a reserved username
+# prefix and a reserved email domain, so a normal sign-up can never be mistaken for one (sign-up
+# refuses the prefix) and cleanup can never delete a real account.
+
+GUEST_PREFIX = "guest_"
+GUEST_EMAIL_DOMAIN = "@guest.netra.local"
+
+
+def is_guest_user(user) -> bool:
+    return bool(user) and str(user.get("username", "")).startswith(GUEST_PREFIX) \
+        and str(user.get("email", "")).endswith(GUEST_EMAIL_DOMAIN)
+
+
+def create_guest_user(password_hash: str) -> dict:
+    """A new guest account. `password_hash` is a hash of a random secret nobody knows."""
+    handle = GUEST_PREFIX + secrets.token_hex(4)
+    user_id = create_user(handle, "Guest", handle + GUEST_EMAIL_DOMAIN, password_hash)
+    return {"id": user_id, "username": handle, "name": "Guest", "email": handle + GUEST_EMAIL_DOMAIN}
+
+
+def count_user_messages(user_id: int) -> int:
+    """All messages this user ever sent (guests get a per-account allowance, not a daily one)."""
+    row = _run(
+        """SELECT COUNT(*) AS n FROM messages m JOIN conversations c ON m.conversation_id = c.id
+           WHERE c.user_id = ? AND m.role = 'user'""",
+        (user_id,),
+        fetch="one",
+    )
+    return int(row["n"]) if row else 0
+
+
+def delete_stale_guests(max_age_days: float = 2) -> list:
+    """Delete guest accounts older than `max_age_days` with their chats. Returns the deleted chat ids."""
+    from datetime import timedelta
+    cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+    guests = _run(
+        "SELECT id FROM users WHERE username LIKE ? AND email LIKE ? AND created_at < ?",
+        (GUEST_PREFIX + "%", "%" + GUEST_EMAIL_DOMAIN, cutoff),
+        fetch="all",
+    ) or []
+    deleted_chats = []
+    for guest in guests:
+        for convo in _run("SELECT id FROM conversations WHERE user_id = ?", (guest["id"],), fetch="all") or []:
+            delete_conversation(convo["id"])
+            deleted_chats.append(convo["id"])
+        _run("DELETE FROM user_memories WHERE user_id = ?", (guest["id"],))
+        _run("DELETE FROM login_tokens WHERE user_id = ?", (guest["id"],))
+        _run("DELETE FROM users WHERE id = ?", (guest["id"],))
+    return deleted_chats
+
+
+# ------------------------ SHARED LINKS ------------------------
+# A share is a frozen copy of ONE answer, reachable by an unguessable token. Nothing else from
+# the chat (other messages, the user's name, memory, PDFs) is ever exposed by a link.
+
+_TOKEN_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+
+
+def _valid_token(token) -> bool:
+    return isinstance(token, str) and 8 <= len(token) <= 64 and set(token) <= _TOKEN_CHARS
+
+
+def create_share(user_id: int, conversation_id: int, message_index: int, usecase: str,
+                 title: str, content: str) -> str:
+    """Create (or return the existing) public link token for one answer."""
+    existing = get_share_for(user_id, conversation_id, message_index)
+    if existing:
+        return existing["token"]
+    token = secrets.token_urlsafe(12)
+    _run(
+        """INSERT INTO shared_reports (token, user_id, conversation_id, message_index, usecase, title, content,
+           created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (token, user_id, conversation_id, message_index, usecase, (title or "Netra answer")[:200], content, _now()),
+    )
+    return token
+
+
+def get_share(token):
+    if not _valid_token(token):
+        return None
+    return _run("SELECT * FROM shared_reports WHERE token = ?", (token,), fetch="one")
+
+
+def get_share_for(user_id: int, conversation_id: int, message_index: int):
+    return _run(
+        "SELECT * FROM shared_reports WHERE user_id = ? AND conversation_id = ? AND message_index = ?",
+        (user_id, conversation_id, message_index),
+        fetch="one",
+    )
+
+
+def delete_share(token: str, user_id: int) -> bool:
+    """Stop sharing. Only the owner can remove a link."""
+    if not _valid_token(token):
+        return False
+    share = get_share(token)
+    if not share or share["user_id"] != user_id:
+        return False
+    _run("DELETE FROM shared_reports WHERE token = ? AND user_id = ?", (token, user_id))
+    return True
+
+
+# ------------------------ STAY SIGNED IN ------------------------
+# "Keep me signed in" puts a random token in a browser cookie. Only its SHA-256 hash is stored here,
+# so someone who reads the database can't use the tokens. Each token expires and is removed on sign-out.
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(str(token).encode()).hexdigest()
+
+
+def create_login_token(user_id: int, days: float = 30) -> str:
+    token = secrets.token_urlsafe(32)
+    _run("INSERT INTO login_tokens (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
+         (_token_hash(token), user_id, (datetime.now() + timedelta(days=days)).isoformat(), _now()))
+    return token
+
+
+def user_for_login_token(token):
+    """The user a still-valid token belongs to, else None (expired tokens are cleaned up on the way)."""
+    if not token or not isinstance(token, str) or len(token) > 200:
+        return None
+    _run("DELETE FROM login_tokens WHERE expires_at < ?", (_now(),))
+    row = _run("SELECT user_id FROM login_tokens WHERE token_hash = ?", (_token_hash(token),), fetch="one")
+    return get_user_by_id(row["user_id"]) if row else None
+
+
+def delete_login_token(token):
+    if token:
+        _run("DELETE FROM login_tokens WHERE token_hash = ?", (_token_hash(token),))
+
+
+def get_user_by_id(user_id: int):
+    return _run("SELECT * FROM users WHERE id = ?", (user_id,), fetch="one")
+
+
+def get_user_by_email(email: str):
+    return _run("SELECT * FROM users WHERE lower(email) = lower(?)", (email,), fetch="one")
+
+
+# ------------------------ ABUSE LIMITS ------------------------
+# A small log of sign-in events, used to rate-limit them: "guest" (key = visitor's network address),
+# "signup" (key = network address) and "login_fail" (key = lower-case username). Rows older than
+# two days are removed by housekeeping().
+
+def record_event(kind: str, key: str):
+    _run("INSERT INTO auth_events (kind, key, created_at) VALUES (?, ?, ?)", (kind, str(key), _now()))
+
+
+def count_events(kind: str, key: str = None, within_seconds: float = 3600) -> int:
+    """How many `kind` events (for `key`, or for everyone if key is None) in the last `within_seconds`."""
+    since = (datetime.now() - timedelta(seconds=within_seconds)).isoformat()
+    if key is None:
+        row = _run("SELECT COUNT(*) AS n FROM auth_events WHERE kind = ? AND created_at >= ?",
+                   (kind, since), fetch="one")
+    else:
+        row = _run("SELECT COUNT(*) AS n FROM auth_events WHERE kind = ? AND key = ? AND created_at >= ?",
+                   (kind, str(key), since), fetch="one")
+    return int(row["n"]) if row else 0
+
+
+def clear_events(kind: str, key: str):
+    _run("DELETE FROM auth_events WHERE kind = ? AND key = ?", (kind, str(key)))
+
+
+def count_user_usecase_messages_today(user_id: int, usecase: str) -> int:
+    """Messages this user sent today in one mode (e.g. Deep Research runs started)."""
+    row = _run(
+        """SELECT COUNT(*) AS n FROM messages m JOIN conversations c ON m.conversation_id = c.id
+           WHERE c.user_id = ? AND c.usecase = ? AND m.role = 'user' AND m.created_at >= ?""",
+        (user_id, usecase, datetime.now().date().isoformat()), fetch="one")
+    return int(row["n"]) if row else 0
+
+
+def housekeeping(guest_max_age_days: float = 2) -> list:
+    """
+    Delete expired guests (with their chats), expired login tokens and old abuse-limit rows.
+    Returns the deleted chat ids (the caller also clears their agent memory). Running it regularly
+    also counts as database activity, which keeps a free Supabase project from pausing.
+    """
+    deleted = delete_stale_guests(max_age_days=guest_max_age_days)
+    _run("DELETE FROM login_tokens WHERE expires_at < ?", (_now(),))
+    _run("DELETE FROM auth_events WHERE created_at < ?", ((datetime.now() - timedelta(days=2)).isoformat(),))
+    return deleted

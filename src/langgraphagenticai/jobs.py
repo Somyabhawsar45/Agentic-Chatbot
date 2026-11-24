@@ -10,6 +10,9 @@ Rules that keep this safe:
   * the worker never touches Streamlit; it only updates its Job under the job's lock
   * one job registry per server process, keyed by job id and by conversation id
   * jobs live in memory: a server restart loses a running job (the UI then offers "Run again")
+  * at most MAX_BACKGROUND_RUNS jobs work at once (default 3), first come first served; the rest
+    wait in line (queue_position > 0) and start by themselves. A run waiting for plan approval
+    doesn't hold a place.
 """
 import threading
 import time
@@ -20,6 +23,7 @@ from langchain_core.messages import AIMessage
 from langgraph.types import Command
 
 from src.langgraphagenticai.database import db_utils
+from src.langgraphagenticai.settings import max_background_runs
 from src.langgraphagenticai.ui.streamlitui.components import ResearchProgress, describe_step, friendly_error
 
 MAX_JOBS = 200                      # registry size cap (oldest finished jobs are dropped first)
@@ -41,6 +45,7 @@ class Job:
     error: str = ""
     started: float = field(default_factory=time.time)
     finished: float = None
+    queue_position: int = 0          # > 0 while waiting in line for a free slot
     delivered: bool = False          # the UI has put the answer into the open chat
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     finished_event: threading.Event = field(default_factory=threading.Event, repr=False)
@@ -56,6 +61,7 @@ class Job:
                 "sources": list(self.sources),
                 "plan": list(self.plan),
                 "error": self.error,
+                "queued": self.queue_position,
                 "elapsed": (self.finished or time.time()) - self.started,
             }
 
@@ -112,6 +118,41 @@ def cancel(job: Job) -> None:
             job.status = "cancelled"
 
 
+# ---------------- the line: at most max_background_runs() jobs work at the same time ----------------
+_slots = threading.Condition()
+_active = 0
+_waiting = []          # job ids, first come first served
+
+
+def _take_slot(job: Job) -> None:
+    """Block until it's this job's turn and a slot is free; keeps job.queue_position up to date."""
+    global _active
+    with _slots:
+        _waiting.append(job.id)
+        try:
+            while _active >= max_background_runs() or _waiting[0] != job.id:
+                with job.lock:
+                    job.queue_position = _waiting.index(job.id) + 1
+                _slots.wait(timeout=1.0)
+        finally:
+            _waiting.remove(job.id)
+        _active += 1
+    with job.lock:
+        job.queue_position = 0
+
+
+def _free_slot() -> None:
+    global _active
+    with _slots:
+        _active = max(0, _active - 1)
+        _slots.notify_all()
+
+
+def running_count() -> int:
+    with _slots:
+        return _active
+
+
 def _interrupt_plan(update_value) -> list:
     """The plan carried by a LangGraph interrupt (human review of the research plan)."""
     items = update_value if isinstance(update_value, (list, tuple)) else [update_value]
@@ -123,7 +164,10 @@ def _interrupt_plan(update_value) -> list:
 
 
 def _run(job: Job, graph, inputs, config: dict, auto_approve: bool) -> None:
+    has_slot = False
     try:
+        _take_slot(job)
+        has_slot = True
         while True:
             paused_plan = None
             last_step = time.perf_counter()
@@ -173,4 +217,6 @@ def _run(job: Job, graph, inputs, config: dict, auto_approve: bool) -> None:
         with job.lock:
             job.status, job.error, job.finished = "error", friendly_error(e), time.time()
     finally:
+        if has_slot:
+            _free_slot()
         job.finished_event.set()

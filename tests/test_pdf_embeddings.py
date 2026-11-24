@@ -92,6 +92,6 @@ def test_too_large_pdf_is_refused_with_a_clear_message(tmp_path, monkeypatch):
 
 def test_bad_chunk_limit_setting_does_not_crash(monkeypatch):
     monkeypatch.setenv("MAX_PDF_CHUNKS", "lots")
-    assert pdf_rag_utils._max_chunks() == 1500
+    assert pdf_rag_utils._max_chunks() == 500
     monkeypatch.setenv("MAX_PDF_CHUNKS", "0")
     assert pdf_rag_utils._max_chunks() == 1

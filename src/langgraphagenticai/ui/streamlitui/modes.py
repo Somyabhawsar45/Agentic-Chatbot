@@ -62,6 +62,7 @@ MODES = {
             ("date_range", "Weekly"),
             ("calendar_month", "Monthly"),
         ],
+        "hints": ["What happened in AI this week?", "Any big model releases today?", "Latest AI news from India"],
     },
     "Deep Research": {
         "icon": "travel_explore",
@@ -82,3 +83,9 @@ NAV_ORDER = ["Netra Agent", "Basic Chatbot", "Chatbot With Web", "Chat with PDF"
 
 def mode(usecase: str) -> dict:
     return MODES.get(usecase, {"icon": "chat", "label": usecase, "tagline": "", "starters": [], "caps": []})
+
+
+def hints(usecase: str) -> list:
+    """Example questions the empty message box types out for this mode."""
+    info = mode(usecase)
+    return info.get("hints") or [prompt for _, prompt in info.get("starters", [])]

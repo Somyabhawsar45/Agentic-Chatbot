@@ -27,7 +27,15 @@ WEB_GUIDE = (
     "- Use `tavily_search` for current events, recent facts or prices. "
     "One search is usually enough; then answer from the results instead of searching again."
 )
-PDF_GUIDE = "- A PDF is attached to this conversation: use `search_pdf` for any question about the document."
+PDF_GUIDE = (
+    "- A document is attached to this conversation{name}. For any question that could be about it, "
+    "including the company, people or figures it describes, call `search_pdf` FIRST and answer from it. "
+    "Only search the web if the document doesn't cover the question, and say so."
+)
+
+
+def pdf_guide(filename) -> str:
+    return PDF_GUIDE.format(name=f': "{filename}"' if filename else "")
 MEMORY_GUIDE = (
     "- When the user shares a lasting personal fact or preference (name, role, goals, how they like "
     "answers) or asks you to remember something, call `save_memory` once, then reply normally. "
@@ -72,7 +80,7 @@ class NetraAgentNode:
         )
         guides = (
             ([WEB_GUIDE] if self.web_tools else [])
-            + ([PDF_GUIDE] if has_pdf else [])
+            + ([pdf_guide(db_utils.get_pdf_filename(conversation_id))] if has_pdf else [])
             + ([MEMORY_GUIDE] if has_user and self.memory_tools else [])
         )
 

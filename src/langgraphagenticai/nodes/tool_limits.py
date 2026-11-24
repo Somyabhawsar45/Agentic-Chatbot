@@ -75,3 +75,33 @@ def answer_without_tools(llm, messages: list):
         if "tool" not in str(e).lower():
             raise
         return llm.invoke(plain + [PLAIN_TEXT_ONLY])
+
+
+def _tool_refusal(error: Exception) -> bool:
+    """Groq's error when gpt-oss tries a (built-in) tool on a request that has none."""
+    text = str(error).lower()
+    return "tool choice is none" in text or "tool_use_failed" in text or "called a tool" in text
+
+
+def invoke_plain(llm, messages, retries: int = 2, **kwargs):
+    """
+    llm.invoke for steps that must answer in plain text (news summaries, research notes, the report).
+    gpt-oss on Groq sometimes reaches for a built-in tool anyway and Groq rejects the whole request
+    ("Tool choice is none, but model called a tool"). Then: ask again, with a firm plain-text rule.
+    """
+    if isinstance(messages, str):
+        messages = [HumanMessage(content=messages)]
+    try:
+        return llm.invoke(messages, **kwargs)
+    except Exception as e:
+        if not _tool_refusal(e):
+            raise
+        last = e
+    for _ in range(retries):
+        try:
+            return llm.invoke([PLAIN_TEXT_ONLY] + list(messages), **kwargs)
+        except Exception as e:
+            if not _tool_refusal(e):
+                raise
+            last = e
+    raise last

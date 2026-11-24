@@ -1,13 +1,19 @@
-name: Keep Streamlit Awake
+name: Keep the app awake
 
+# Opens the live app in a real browser every 6 hours so the host doesn't put it to sleep
+# (Hugging Face Spaces sleep after 48 h without visitors). Each visit also runs the app's hourly
+# housekeeping, which keeps a free Supabase database active.
+# Set the app's address once: repo Settings -> Secrets and variables -> Actions -> variable APP_URL
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '17 */6 * * *'
   workflow_dispatch:
 
 jobs:
   ping:
     runs-on: ubuntu-latest
+    env:
+      APP_URL: ${{ vars.APP_URL || 'https://netra-agentic-ai.streamlit.app' }}
     steps:
       - name: Install Playwright
         run: |
@@ -15,15 +21,15 @@ jobs:
           npm install playwright
           npx playwright install --with-deps chromium
 
-      - name: Visit Streamlit app
+      - name: Visit the app
         run: |
           node -e "
           const { chromium } = require('playwright');
           (async () => {
             const browser = await chromium.launch();
             const page = await browser.newPage();
-            await page.goto('https://netra-agentic-ai.streamlit.app', { waitUntil: 'networkidle', timeout: 90000 });
-            await page.waitForTimeout(10000);
+            await page.goto(process.env.APP_URL, { waitUntil: 'networkidle', timeout: 120000 });
+            await page.waitForTimeout(15000);
             await browser.close();
           })();
           "

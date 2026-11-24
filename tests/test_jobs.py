@@ -126,3 +126,39 @@ def test_cancel_only_affects_a_waiting_job(fake_llm_factory, monkeypatch):
     job.wait(10)
     jobs.cancel(job)
     assert job.snapshot()["status"] == "cancelled"
+
+
+class BlockingGraph:
+    """Holds its run open until `release` is set, then answers."""
+
+    def __init__(self):
+        import threading
+        self.started, self.release = threading.Event(), threading.Event()
+
+    def stream(self, inputs, config=None, stream_mode=None):
+        self.started.set()
+        self.release.wait(5)
+        yield {"save_result": {"messages": [AIMessage(content="done")]}}
+
+
+def test_only_a_few_runs_work_at_once_and_the_rest_wait_in_line(monkeypatch):
+    import time
+    monkeypatch.setenv("MAX_BACKGROUND_RUNS", "1")
+    first_graph, second_graph = BlockingGraph(), BlockingGraph()
+    first = jobs.start(first_graph, {}, {}, _conversation("Deep Research"), "Deep Research")
+    assert first_graph.started.wait(5)
+    second = jobs.start(second_graph, {}, {}, _conversation("AI News"), "AI News")
+
+    deadline = time.time() + 5
+    while second.snapshot()["queued"] != 1 and time.time() < deadline:
+        time.sleep(0.05)
+    assert second.snapshot()["queued"] == 1 and second.snapshot()["status"] == "running"
+    assert not second_graph.started.is_set()          # still waiting for its turn
+    assert jobs.running_count() == 1
+
+    first_graph.release.set()
+    assert first.wait(5) and second_graph.started.wait(5)   # the slot passes to the next in line
+    assert second.snapshot()["queued"] == 0
+    second_graph.release.set()
+    assert second.wait(5) and second.snapshot()["status"] == "done"
+    assert jobs.running_count() == 0                  # every slot is given back

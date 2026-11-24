@@ -1,0 +1,21 @@
+# never put secrets or local data into the image
+.env
+.env.*
+.streamlit/secrets.toml
+*.db
+*.db-shm
+*.db-wal
+pdf_indexes/
+keys.txt
+
+# not needed to run the app
+.git/
+.github/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/
+evals/results/
+mcp_server/

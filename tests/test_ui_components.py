@@ -31,7 +31,7 @@ def test_only_http_links_are_allowed():
         assert c.safe_url(bad) is None
 
 
-def test_source_pills_dedupe_number_escape_and_drop_unsafe_links():
+def test_source_pills_dedupe_icons_escape_and_drop_unsafe_links():
     results = [
         {"title": 'A "quoted" <b>title</b>', "url": "https://www.example.com/a"},
         {"title": "dup", "url": "https://www.example.com/a"},
@@ -40,7 +40,10 @@ def test_source_pills_dedupe_number_escape_and_drop_unsafe_links():
     ]
     html_out = c.source_pills_html(results)
     assert html_out.count('class="src-pill"') == 2
-    assert ">1</span>example.com</a>" in html_out and ">2</span>news.test</a>" in html_out
+    assert '<span class="src-count">2 sources</span>' in html_out
+    assert html_out.count('class="fav"') == 4                 # 2 in the stack + 1 per pill
+    assert "domain=example.com&amp;sz=64" in html_out and ">E<img" in html_out   # icon over a letter badge
+    assert "</span>example.com</a>" in html_out and "</span>news.test</a>" in html_out
     assert "javascript:" not in html_out and "<b>title</b>" not in html_out
     assert 'rel="noopener noreferrer"' in html_out
     assert c.source_pills_html([]) == ""
@@ -76,25 +79,32 @@ def test_timeline_maps_emoji_to_icons_and_splits_out_the_duration():
 def test_research_progress_follows_the_graph():
     p = c.ResearchProgress()
     assert "Planning" in p.status_text()
+    assert p.html().count("Researcher") == 3 and "waiting for the plan" in p.html()   # placeholders
     p.update("planner", {"plan": ["q1", "q2", "q3"]})
     p.pause()
     assert p.waiting and "approve" in p.status_text()
-    assert 'class="rp-step wait"' in p.html() and 'class="rp-step done"' in p.html()
+    out = p.html()
+    assert "waiting for your OK" in out and out.count('class="am-node wait"') == 4   # planner + 3 queued
 
-    resumed = c.ResearchProgress(total=3, resumed=True)
+    resumed = c.ResearchProgress(total=3, resumed=True, plan=["q1", "q2 <b>", "q3"])
+    resumed.update("researcher", {"findings": [{"query": "q2 <b>"}]})
+    out = resumed.html()
+    assert "1 of 3" in resumed.status_text()
+    assert out.count('class="am-node done"') == 2                     # the planner + researcher 2
+    assert out.count('class="am-node active"') == 2                    # researchers 1 and 3 still working
+    assert "q2 &lt;b&gt;" in out and "<b>" not in out                  # questions are escaped
+    assert 'am-edge on flow' in out                                    # planner -> researchers is flowing
     resumed.update("researcher", {"findings": [{"query": "q1"}]})
-    assert "1 of 3" in resumed.status_text() and "Research 1/3" in resumed.html()
-    resumed.update("researcher", {"findings": [{"query": "q2"}]})
     resumed.update("researcher", {"findings": [{"query": "q3"}]})
     assert resumed.active == "writer"
     resumed.update("writer", {"draft": "..."})
     resumed.update("critic", {"critique": "- fix the intro"})
-    assert resumed.active == "writer"                 # sent back for a revision
+    assert resumed.active == "writer" and "revision 1" in resumed.html()   # sent back for a revision
     resumed.update("writer", {"draft": "..."})
     resumed.update("critic", {"critique": "APPROVED"})
     resumed.update("finalize", {})
     assert resumed.finished and resumed.status_text() == "Report ready"
-    assert resumed.html().count('class="rp-step done"') == len(c.ResearchProgress.STAGES)
+    assert resumed.html().count('class="am-node done"') == 1 + 3 + 3   # planner, 3 researchers, writer/critic/report
 
 
 # ---------------- report header ----------------
@@ -115,3 +125,49 @@ def test_every_mode_has_capability_pills():
     for usecase in NAV_ORDER:
         caps = MODES[usecase]["caps"]
         assert 2 <= len(caps) <= 4 and all(icon and text for icon, text in caps)
+
+
+def test_leaked_tool_call_markup_is_removed():
+    leaked = ("Revenue grew 18% (p. 2).\n\nSource: report【assistant to=tavily_search<|channel|>commentary "
+              '<|constrain|>json<|message|>{"query":"x"}')
+    assert c.clean_markdown(leaked) == "Revenue grew 18% (p. 2).\n\nSource: report"
+    assert c.strip_leaked_tool_calls("ok <|end|>") == "ok"
+    assert c.clean_markdown("Use `to=` in code") == "Use `to=` in code"   # normal text untouched
+
+
+def test_copy_button_embeds_text_safely():
+    out = c.copy_button_html('Report with </script><script>alert(1)</script> and "quotes"', "7-3")
+    assert 'id="cp-7-3"' in out and "navigator.clipboard.writeText" in out
+    assert out.count("</script>") == 1                     # only the button's own closing tag
+    assert r"<\/script>" in out                            # the answer's tag is neutralised
+    assert c.copy_button_html("x", 'bad"id<>').count('id="cp-badid"') == 1
+    assert ">Copy link<" in c.copy_button_html("https://x", "l", "Copy link")
+
+
+def test_model_citation_markers_are_removed():
+    assert c.clean_markdown("Python 3.15 is out 【7b2fcb-00】. See【4†source】 docs.") == "Python 3.15 is out. See docs."
+
+
+def test_link_citations_become_small_clickable_sources():
+    text = "UPI launched in 2016【https://www.npci.org.in/what-we-do/upi/product-overview】. Grew fast【javascript:alert(1)】."
+    assert c.clean_markdown(text) == ("UPI launched in 2016 ([npci.org.in](https://www.npci.org.in/what-we-do/upi/product-overview)). "
+                                      "Grew fast.")
+
+
+def test_cited_pages_are_read_from_the_answer():
+    assert c.cited_pages("Revenue was INR 4,820 crore (p. 2).") == {2}
+    assert c.cited_pages("See pp. 3–5 and page 9, also p.12") == {3, 4, 5, 9, 12}
+    assert c.cited_pages("pages 4 and 6") == {4, 6}
+    assert c.cited_pages("The app. 2 and step 3 are fine") == set()     # not page references
+    assert c.cited_pages("") == set()
+
+
+def test_cited_page_chips_come_first_and_the_rest_are_quieter():
+    cites = [{"page": p, "text": f"passage {p}", "source": "r.pdf"} for p in (1, 2, 4, 6)]
+    out = c.citation_chips_html(cites, "Revenue grew 18% (p. 2) and margins improved (p. 6).")
+    first_also = out.index("Also checked")
+    assert out.index("p. 2") < out.index("p. 6") < first_also < out.index("p. 1") < out.index("p. 4")
+    assert out.count('class="cite-chip also"') == 2
+    # no page named in the answer: every chip shows normally, as before
+    plain = c.citation_chips_html(cites, "No page mentioned.")
+    assert "Also checked" not in plain and plain.count('class="cite-chip"') == 4

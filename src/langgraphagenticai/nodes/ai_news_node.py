@@ -1,4 +1,7 @@
 from tavily import TavilyClient
+
+from src.langgraphagenticai.tools.tavily_pool import RotatingTavilyClient
+from src.langgraphagenticai.nodes.tool_limits import invoke_plain
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import AIMessage
 
@@ -18,8 +21,8 @@ class AINewsNode:
     """
 
     def __init__(self, llm, tavily_api_key=None):
-        # api_key=None makes TavilyClient fall back to the TAVILY_API_KEY env var
-        self.tavily = TavilyClient(api_key=tavily_api_key)
+        # the app's Tavily keys in turn (TAVILY_API_KEY + TAVILY_API_KEYS), or the visitor's own key
+        self.tavily = RotatingTavilyClient(tavily_api_key, client_factory=TavilyClient)
         self.llm = llm
 
     # ==========================================================
@@ -67,7 +70,7 @@ class AINewsNode:
                 f"Content: {item.get('content', '')}\n"
                 f"URL: {item.get('url', '')}"
             )
-            response = self.llm.invoke(map_prompt.format(article=article_text))
+            response = invoke_plain(self.llm, map_prompt.format(article=article_text))
             individual_summaries.append(f"- {response.content.strip()}")
 
         reduce_prompt = ChatPromptTemplate.from_messages([
@@ -83,7 +86,7 @@ class AINewsNode:
             ("user", "{summaries}"),
         ])
 
-        final_response = self.llm.invoke(
+        final_response = invoke_plain(self.llm, 
             reduce_prompt.format(summaries="\n".join(individual_summaries))
         )
         return {"summary": final_response.content}

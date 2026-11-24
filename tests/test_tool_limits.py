@@ -88,3 +88,34 @@ def test_web_chatbot_node_answers_without_tools_once_searches_are_used_up(fake_l
     # and before the limit it still offers the tool
     fresh = node({"messages": [HumanMessage(content="hi")]})
     assert fresh["messages"][0].content == "STILL SEARCHING"
+
+
+def test_invoke_plain_retries_when_groq_says_the_model_called_a_tool():
+    from langchain_core.messages import AIMessage, SystemMessage
+    from src.langgraphagenticai.nodes.tool_limits import invoke_plain
+
+    class Flaky:
+        def __init__(self, fails):
+            self.fails, self.calls = fails, []
+
+        def invoke(self, messages, **kwargs):
+            self.calls.append((messages, kwargs))
+            if len(self.calls) <= self.fails:
+                raise RuntimeError("Error code: 400 - Tool choice is none, but model called a tool")
+            return AIMessage(content="summary")
+
+    llm = Flaky(fails=1)
+    assert invoke_plain(llm, "Summarise this", max_tokens=100).content == "summary"
+    first, second = llm.calls
+    assert isinstance(second[0][0], SystemMessage) and "plain text" in second[0][0].content.lower()
+    assert second[1] == {"max_tokens": 100}                         # settings are kept on the retry
+
+    import pytest
+    with pytest.raises(RuntimeError):
+        invoke_plain(Flaky(fails=5), "x")                           # gives up after a few tries
+
+    class Other:
+        def invoke(self, messages, **kwargs):
+            raise ValueError("network down")
+    with pytest.raises(ValueError):
+        invoke_plain(Other(), "x")                                  # other errors aren't retried
