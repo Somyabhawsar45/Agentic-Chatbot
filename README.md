@@ -206,6 +206,22 @@ in a frame, where browsers block the "Keep me signed in" cookie.
 
 The same container also runs on any Docker host: `docker build -t netra . && docker run -p 7860:7860 --env-file .env netra`.
 
+### Keep it awake (Streamlit Community Cloud sleeps apps after 12 h without visitors)
+The **Keep the app awake** workflow opens the app in a real browser, clicks "Yes, get this app back up!"
+if it was asleep, and fails (GitHub emails you) if Netra doesn't load. Set the repo variable `APP_URL`
+to your app's address.
+
+GitHub runs scheduled jobs late when it is busy (gaps of several hours), so for a reliable timer also
+trigger it from **cron-job.org** (free):
+1. GitHub → Settings → Developer settings → **Fine-grained tokens** → new token, only this repository,
+   permission **Actions: Read and write**. Copy it.
+2. cron-job.org → **Create cronjob**: URL
+   `https://api.github.com/repos/<user>/<repo>/actions/workflows/keep-alive.yml/dispatches`,
+   schedule **every 2 hours**, **Advanced** → method **POST**, headers
+   `Authorization: Bearer <token>`, `Accept: application/vnd.github+json`, body `{"ref":"main"}`.
+3. Run it once: a new "Keep the app awake" run should appear in the Actions tab.
+
+
 ### Streamlit Community Cloud (alternative)
 Put the same keys in **App settings → Secrets** (TOML format, e.g. `GROQ_API_KEY = "..."`).
 

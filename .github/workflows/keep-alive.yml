@@ -1,40 +1,90 @@
 name: Keep the app awake
 
-# Opens the live app in a real browser about hourly so the host doesn't put it to sleep
-# (Streamlit Community Cloud sleeps an app after 12 h without visitors). Each visit also runs the
-# app's hourly housekeeping, which keeps a free Supabase database active. GitHub emails you if a
-# run fails. Note: GitHub pauses scheduled workflows after 60 days without repo activity.
-# Set the app's address once: repo Settings -> Secrets and variables -> Actions -> variable APP_URL
+# Opens the live app in a real browser so Streamlit Community Cloud never puts it to sleep
+# (it sleeps after 12 h without visitors). If the app is already asleep, it clicks
+# "Yes, get this app back up!" and waits until Netra itself has loaded. If Netra doesn't load,
+# the run FAILS, and GitHub emails you, so a green run really means "the app is up".
+# Each visit also runs the app's hourly housekeeping, which keeps a free Supabase database active.
+#
+# GitHub runs scheduled jobs late or skips them when it is busy, so this asks twice an hour.
+# For a fully reliable schedule, also trigger it from cron-job.org (see README, "Keep it awake").
+# GitHub pauses scheduled workflows after 60 days without repo activity.
 on:
   schedule:
-    # GitHub delays and skips scheduled runs under load (runs came 4-6 hours apart even with a
-    # 10-minute schedule), so ask often: two staggered hourly runs leave a wide safety margin
-    # against the 12-hour sleep limit.
     - cron: '17 * * * *'
     - cron: '47 * * * *'
   workflow_dispatch:
 
+concurrency:
+  group: keep-alive
+  cancel-in-progress: false
+
 jobs:
   ping:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
-      APP_URL: ${{ vars.APP_URL || 'https://netra-agentic-ai.streamlit.app' }}
+      APP_URL: ${{ vars.APP_URL || 'https://netra-agent.streamlit.app' }}
     steps:
       - name: Install Playwright
         run: |
-          npm init -y
-          npm install playwright
-          npx playwright install --with-deps chromium
+          npm init -y > /dev/null
+          npm install playwright > /dev/null
+          npx playwright install --with-deps chromium > /dev/null
 
-      - name: Visit the app
+      - name: Visit the app (and wake it if asleep)
         run: |
-          node -e "
+          cat > visit.js <<'EOF'
           const { chromium } = require('playwright');
+
+          // look in the page and in every frame (Streamlit Cloud shows the app inside a frame)
+          async function findText(page, text) {
+            for (const frame of page.frames()) {
+              try {
+                const el = frame.getByText(text, { exact: false }).first();
+                if (await el.isVisible({ timeout: 500 })) return el;
+              } catch (e) {}
+            }
+            return null;
+          }
+
           (async () => {
+            const url = process.env.APP_URL;
             const browser = await chromium.launch();
             const page = await browser.newPage();
-            await page.goto(process.env.APP_URL, { waitUntil: 'networkidle', timeout: 120000 });
-            await page.waitForTimeout(15000);
+            console.log('Opening', url);
+            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 120000 });
+
+            const deadline = Date.now() + 6 * 60 * 1000;     // waking can take a few minutes
+            let woke = false;
+            while (Date.now() < deadline) {
+              const wake = await findText(page, 'get this app back up');
+              if (wake && !woke) {
+                console.log('App was asleep: clicking the wake-up button');
+                await wake.click();
+                woke = true;
+              }
+              // Netra is up when its sign-in page (or the app) shows
+              if (await findText(page, 'Try it now') || await findText(page, 'what can I help with')) {
+                console.log(woke ? 'Netra woke up and loaded' : 'Netra is awake and loaded');
+                await page.waitForTimeout(20000);            // stay a moment so the visit counts
+                await browser.close();
+                process.exit(0);
+              }
+              await page.waitForTimeout(5000);
+            }
+            console.log('Netra did not load in time');
+            await page.screenshot({ path: 'app.png', fullPage: true });
             await browser.close();
+            process.exit(1);
           })();
-          "
+          EOF
+          node visit.js
+
+      - name: Save a screenshot if it failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-screenshot
+          path: app.png
+          if-no-files-found: ignore
